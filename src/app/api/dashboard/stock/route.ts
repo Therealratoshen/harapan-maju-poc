@@ -26,17 +26,22 @@ export async function GET() {
       ORDER BY sl.sku_id
     `);
 
-    const stock = stockData.map((row) => ({
-      skuId: row.sku_id,
-      skuName: row.normalized_name ?? "Unknown",
-      partNumber: row.part_number,
-      category: row.category ?? "uncategorized",
-      unit: row.unit ?? "pcs",
-      stockIn: Number(row.in_qty ?? 0),
-      stockOut: Number(row.out_qty ?? 0),
-      balance: Number((row.in_qty ?? 0) - (row.out_qty ?? 0)),
-      stockValue: Number(row.stock_value ?? 0),
-    }));
+    const stock = stockData.map((row) => {
+      const inQty  = Number(row.in_qty  ?? 0);
+      const outQty = Number(row.out_qty ?? 0);
+      const sv     = Number(row.stock_value ?? 0);
+      return {
+        skuId:     row.sku_id,
+        skuName:   row.normalized_name ?? "Unknown",
+        partNumber: row.part_number,
+        category:  row.category ?? "uncategorized",
+        unit:      row.unit ?? "pcs",
+        stockIn:   inQty,
+        stockOut:  outQty,
+        balance:   inQty - outQty,
+        stockValue: sv,
+      };
+    });
 
     // Current value = sum of (balance * avg unit price for remaining stock)
     const currentValue = stock.reduce((sum, s) => {
