@@ -52,8 +52,8 @@ export async function GET() {
       currentValue: Math.round(currentValue),
       unreconciledCount: unreconciledCount[0]?.count ?? 0,
     });
-  } catch (err) {
-    console.error(err);
-    return NextResponse.json({ error: "Failed to fetch stock" }, { status: 500 });
+  } catch (err: any) {
+    console.error("[stock]", err?.message ?? err);
+    return NextResponse.json({ error: "Failed to fetch stock", detail: err?.message }, { status: 500 });
   }
 }

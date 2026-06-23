@@ -34,9 +34,9 @@ export async function GET() {
       .groupBy(schema.flags.flagType);
 
     return NextResponse.json({ flags, flagCounts });
-  } catch (err) {
-    console.error(err);
-    return NextResponse.json({ error: "Failed to fetch flags" }, { status: 500 });
+  } catch (err: any) {
+    console.error("[flags]", err?.message ?? err);
+    return NextResponse.json({ error: "Failed to fetch flags", detail: err?.message }, { status: 500 });
   }
 }
 
