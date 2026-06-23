@@ -65,22 +65,25 @@ export async function POST(
 
     const newStatus = action === "approve" ? "approved" : "rejected";
 
-    // Update receipt status
+    // ── Fetch line items before updating status ─────────────────────────
+    const lineItems = await db
+      .select()
+      .from(schema.lineItems)
+      .where(eq(schema.lineItems.receiptId, receiptId));
+    const computedTotal = lineItems.reduce((sum, li) => sum + (li.totalPrice ?? 0), 0);
+
+    // Update receipt status + computed_total (source of truth = line items)
     await db
       .update(schema.receipts)
       .set({
-        status: newStatus as any,
-        notes:   note ? [receipt.notes, note].filter(Boolean).join(" | ") : receipt.notes,
+        status:        newStatus as any,
+        computedTotal: computedTotal as any,
+        notes:         note ? [receipt.notes, note].filter(Boolean).join(" | ") : receipt.notes,
       })
       .where(eq(schema.receipts.id, receiptId));
 
     // ── On APPROVAL: stock ledger + flags ─────────────────────────────────
     if (newStatus === "approved") {
-      // Fetch all line items for this receipt
-      const lineItems = await db
-        .select()
-        .from(schema.lineItems)
-        .where(eq(schema.lineItems.receiptId, receiptId));
 
       // Get existing SKU ids from line items
       const skuIds = [...new Set(lineItems.map(li => li.skuId).filter(Boolean))];

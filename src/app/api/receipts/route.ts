@@ -51,11 +51,19 @@ export async function GET(request: NextRequest) {
       ? await db.select().from(schema.flags)
       : [];
 
-    const receiptsWithData = receipts.map(r => ({
-      ...r,
-      lineItems: allLineItems.filter(li => li.receiptId === r.id),
-      flags: allFlags.filter(f => f.receiptId === r.id),
-    }));
+    const receiptsWithData = receipts.map(r => {
+      const lineItems = allLineItems.filter(li => li.receiptId === r.id);
+      const flags     = allFlags.filter(f => f.receiptId === r.id);
+      // Always compute total from line items — this is the source of truth
+      const computedTotal = lineItems.reduce((sum, li) => sum + (li.totalPrice ?? 0), 0);
+      return {
+        ...r,
+        // Override stored value with live-computed sum so UI is always accurate
+        computedTotal,
+        lineItems,
+        flags,
+      };
+    });
 
     return NextResponse.json({ receipts: receiptsWithData });
   } catch (err) {

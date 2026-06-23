@@ -30,16 +30,31 @@ export async function GET(request: NextRequest) {
     if (fromDate) baseApproved.push(gte(schema.receipts.receiptDate, fromDate));
     if (toDate)   baseApproved.push(lte(schema.receipts.receiptDate, toDate));
 
-    // ── Revenue & COGS ─────────────────────────────────
-    const [revenueResult] = await db
-      .select({ total: sql<number>`COALESCE(SUM(declared_total), 0)` })
+    // ── Revenue & COGS — computed live from line items (source of truth) ──
+    // Fetch approved receipts + their line items and compute totals in JS
+    const approvedReceipts = await db
+      .select()
       .from(schema.receipts)
-      .where(and(...baseApproved, eq(schema.receipts.receiptType, "supplier")));
+      .where(and(...baseApproved));
+    const approvedReceiptIds = approvedReceipts.map(r => r.id);
+    const allApprovedLineItems = approvedReceiptIds.length > 0
+      ? await db.select().from(schema.lineItems)
+      : [];
 
-    const [cogsResult] = await db
-      .select({ total: sql<number>`COALESCE(SUM(declared_total), 0)` })
-      .from(schema.receipts)
-      .where(and(...baseApproved, eq(schema.receipts.receiptType, "buyer")));
+    // Build receiptId → computedTotal map
+    const receiptComputedMap: Record<number, number> = {};
+    for (const li of allApprovedLineItems) {
+      if (!receiptComputedMap[li.receiptId]) receiptComputedMap[li.receiptId] = 0;
+      receiptComputedMap[li.receiptId] += li.totalPrice ?? 0;
+    }
+
+    let revenue = 0, cogs = 0;
+    for (const r of approvedReceipts) {
+      if (r.currency !== "IDR") continue;
+      const compTotal = receiptComputedMap[r.id] ?? 0;
+      if (r.receiptType === "supplier") revenue += compTotal;
+      if (r.receiptType === "buyer")    cogs    += compTotal;
+    }
 
     // ── Counts ──────────────────────────────────────────
     const allIdrConditions: any[] = [eq(schema.receipts.currency, "IDR")];
@@ -62,37 +77,38 @@ export async function GET(request: NextRequest) {
         receiptType:   schema.receipts.receiptType,
         declaredTotal: schema.receipts.declaredTotal,
         receiptDate:   schema.receipts.receiptDate,
+        currency:      schema.receipts.currency,
+        merchantName:  schema.receipts.merchantName,
+        id:            schema.receipts.id,
       })
       .from(schema.receipts)
       .where(and(...baseApproved));
 
     const monthlyMap: Record<string, { month: string; revenue: number; cogs: number; profit: number }> = {};
     for (const r of allApproved) {
+      if (r.currency !== "IDR") continue;
+      const compTotal = receiptComputedMap[r.id] ?? 0;
       const d    = new Date(r.receiptDate!);
       const key  = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
       const label = d.toLocaleDateString("en", { month: "short", year: "numeric" });
       if (!monthlyMap[key]) monthlyMap[key] = { month: label, revenue: 0, cogs: 0, profit: 0 };
-      if (r.receiptType === "supplier") monthlyMap[key].revenue += Number(r.declaredTotal);
-      if (r.receiptType === "buyer")    monthlyMap[key].cogs    += Number(r.declaredTotal);
+      if (r.receiptType === "supplier") monthlyMap[key].revenue += compTotal;
+      if (r.receiptType === "buyer")    monthlyMap[key].cogs    += compTotal;
     }
     for (const m of Object.values(monthlyMap)) { m.profit = m.revenue - m.cogs; }
     const monthly = Object.values(monthlyMap).reverse();
 
-    // ── COGS by Supplier (NEW) ─────────────────────────
-    const cogsBySupplierRows = await db
-      .select({
-        supplier: schema.receipts.merchantName,
-        total:    sql<number>`COALESCE(SUM(declared_total), 0)`,
-      })
-      .from(schema.receipts)
-      .where(and(...baseApproved, eq(schema.receipts.receiptType, "buyer")))
-      .groupBy(schema.receipts.merchantName)
-      .orderBy(desc(sql`COALESCE(SUM(declared_total), 0)`))
-      .limit(6);
-
-    const cogsBySupplier = cogsBySupplierRows
-      .filter(r => r.supplier)
-      .map(r => ({ supplier: r.supplier, total: Number(r.total) }));
+    // ── COGS by Supplier — computed from line items ────────
+    const supplierMap: Record<string, number> = {};
+    for (const r of allApproved) {
+      if (r.currency !== "IDR" || r.receiptType !== "buyer") continue;
+      const key = r.merchantName ?? "Unknown";
+      supplierMap[key] = (supplierMap[key] ?? 0) + (receiptComputedMap[r.id] ?? 0);
+    }
+    const cogsBySupplier = Object.entries(supplierMap)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([supplier, total]) => ({ supplier, total }));
 
     // ── Recent receipts ────────────────────────────────
     const recentReceipts = await db
@@ -111,24 +127,19 @@ export async function GET(request: NextRequest) {
       .select({ lineItemCount: sql<number>`COUNT(*)` })
       .from(schema.lineItems);
 
-    // ── Top merchants (by approved supplier receipts) ────
-    const topMerchantRows = rows<{ merchant_name: string | null; total_value: number; receipt_count: number }>(
-      await pg().unsafe(`
-        SELECT merchant_name,
-               COALESCE(SUM(declared_total), 0)::int AS total_value,
-               COUNT(*)::int AS receipt_count
-        FROM receipts
-        WHERE status = 'approved' AND receipt_type = 'supplier' AND merchant_name IS NOT NULL
-        GROUP BY merchant_name
-        ORDER BY total_value DESC
-        LIMIT 6
-      `)
-    );
-    const topMerchants = topMerchantRows.map(r => ({
-      merchantName: r.merchant_name ?? "—",
-      totalValue:   Number(r.total_value),
-      receiptCount: Number(r.receipt_count),
-    }));
+    // ── Top merchants — computed from line items ─────────────────
+    const merchantRevenueMap: Record<string, { totalValue: number; receiptCount: number }> = {};
+    for (const r of allApproved) {
+      if (r.currency !== "IDR" || r.receiptType !== "supplier") continue;
+      const key = r.merchantName ?? "Unknown";
+      if (!merchantRevenueMap[key]) merchantRevenueMap[key] = { totalValue: 0, receiptCount: 0 };
+      merchantRevenueMap[key].totalValue   += receiptComputedMap[r.id] ?? 0;
+      merchantRevenueMap[key].receiptCount += 1;
+    }
+    const topMerchants = Object.entries(merchantRevenueMap)
+      .sort((a, b) => b[1].totalValue - a[1].totalValue)
+      .slice(0, 6)
+      .map(([merchantName, v]) => ({ merchantName, totalValue: v.totalValue, receiptCount: v.receiptCount }));
 
     // ── Reconciliation alerts (flagged receipts with variance) ─
     const reconciliationRows = rows<{
@@ -146,26 +157,27 @@ export async function GET(request: NextRequest) {
       ORDER BY ABS(r.declared_total - r.computed_total) DESC
       LIMIT 5
     `));
-    const reconciliationAlerts = reconciliationRows.map(r => ({
-      receiptId:       r.id,
-      merchantName:    r.merchant_name ?? "—",
-      receiptType:     r.receipt_type,
-      status:         r.status,
-      declaredTotal:   Number(r.declared_total),
-      computedTotal:  Number(r.computed_total),
-      variance:        Math.abs(Number(r.declared_total) - Number(r.computed_total)),
-      variancePct:      Number(r.computed_total) > 0
-                        ? Math.abs((Number(r.declared_total) - Number(r.computed_total)) / Number(r.computed_total) * 100).toFixed(1)
-                        : "0",
-      confidence:      Number(r.confidence),
-      flagType:       r.flag_type,
-      flagMessage:     r.flag_message,
-    }));
+    const reconciliationAlerts = reconciliationRows.map(r => {
+      const liveComputed = receiptComputedMap[r.id] ?? Number(r.computed_total);
+      const variance    = Math.abs(Number(r.declared_total) - liveComputed);
+      const variancePct = liveComputed > 0 ? Math.abs(variance / liveComputed * 100).toFixed(1) : "0";
+      return {
+        receiptId:    r.id,
+        merchantName: r.merchant_name ?? "—",
+        receiptType: r.receipt_type,
+        status:      r.status,
+        declaredTotal:  Number(r.declared_total),
+        computedTotal: liveComputed,
+        variance:     variance,
+        variancePct:  variancePct,
+        confidence:   Number(r.confidence),
+        flagType:     r.flag_type,
+        flagMessage:  r.flag_message,
+      };
+    });
 
     // ── Computed ────────────────────────────────────────
-    const revenue    = Number(revenueResult?.total ?? 0);
-    const cogsAmt   = Number(cogsResult?.total    ?? 0);
-    const grossProfit = revenue - cogsAmt;
+    const grossProfit = revenue - cogs;
     const grossMargin = revenue > 0 ? (grossProfit / revenue) * 100 : 0;
     const buyerCount    = Number(receiptCounts.find(r => r.type === "buyer")?.count    ?? 0);
     const supplierCount = Number(receiptCounts.find(r => r.type === "supplier")?.count ?? 0);
@@ -179,7 +191,7 @@ export async function GET(request: NextRequest) {
       greeting,
       summary: {
         revenue,
-        cogs: cogsAmt,
+        cogs: cogs,
         grossProfit,
         grossMargin: Math.round(grossMargin * 10) / 10,
         buyerReceipts:    buyerCount,
