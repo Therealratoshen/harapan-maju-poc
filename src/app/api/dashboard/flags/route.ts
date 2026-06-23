@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { eq, desc, sql } from "drizzle-orm";
-import { sql as sqlT } from "drizzle-orm";
 
 // GET /api/dashboard/flags
 export async function GET() {
   try {
-    // Use raw SQL join to avoid drizzle column ordering issues
+    // Use raw SQL join to avoid drizzle GROUP BY column qualification issues
     const flags = await db
       .select({
         id: schema.flags.id,
@@ -25,18 +24,20 @@ export async function GET() {
       .orderBy(desc(schema.flags.id));
 
     // Count by type — use raw SQL to avoid drizzle GROUP BY column name issues
-    const flagCountsRaw = await db
-      .execute(sql<{ flag_type: string; count: number; unresolved: number }>`
-        SELECT flag_type, COUNT(*) as count,
-               SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END) as unresolved
-        FROM flags
-        GROUP BY flag_type
-      `);
-    const flagCounts = flagCountsRaw.map(r => ({
-      flagType: r.flag_type,
-      count: Number(r.count ?? 0),
-      unresolved: Number(r.unresolved ?? 0),
-    }));
+    let flagCounts: any[] = [];
+    try {
+      const flagCountsRaw: any[] = await db.execute(
+        sql`SELECT flag_type, COUNT(*) as count, SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END) as unresolved FROM flags GROUP BY flag_type`
+      );
+      flagCounts = flagCountsRaw.map((r: any) => ({
+        flagType: r.flag_type,
+        count: Number(r.count ?? 0),
+        unresolved: Number(r.unresolved ?? 0),
+      }));
+    } catch (e: any) {
+      console.error("[flags/agg]", e?.message ?? e);
+      // Graceful degradation — return empty counts
+    }
 
     return NextResponse.json({ flags, flagCounts });
   } catch (err: any) {
@@ -65,8 +66,8 @@ export async function PATCH(request: NextRequest) {
       .where(eq(schema.flags.id, flagId));
 
     return NextResponse.json({ success: true });
-  } catch (err) {
-    console.error(err);
+  } catch (err: any) {
+    console.error("[flags/patch]", err?.message ?? err);
     return NextResponse.json({ error: "Failed to update flag" }, { status: 500 });
   }
 }
