@@ -128,7 +128,7 @@ export async function POST(
       await db
         .update(schema.flags)
         .set({
-          resolved:   1,
+          resolved:   true,
           resolvedBy: "owner",
           resolvedAt: new Date(),
         })

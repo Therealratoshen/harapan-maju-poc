@@ -85,7 +85,7 @@ export async function POST(request: NextRequest) {
   // ── flags
   if (t === "flags" || t.includes("flags") || t.includes("masalah")) {
     const rows = await safeQuery(
-      () => db.select({ count: sql<number>`count(*)`, type: schema.flags.flagType }).from(schema.flags).where(eq(schema.flags.resolved, 0)).groupBy(schema.flags.flagType),
+      () => db.select({ count: sql<number>`count(*)`, type: schema.flags.flagType }).from(schema.flags).where(eq(schema.flags.resolved, false)).groupBy(schema.flags.flagType),
       SAMPLE.flags as any
     );
     if (!rows || rows.length === 0) {

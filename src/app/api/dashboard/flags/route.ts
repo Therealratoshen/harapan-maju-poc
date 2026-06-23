@@ -59,7 +59,7 @@ export async function PATCH(request: NextRequest) {
     await db
       .update(schema.flags)
       .set({
-        resolved: resolved ? 1 : 0,
+        resolved: resolved ? true : false,
         resolvedBy,
         resolvedAt: new Date(),
       })

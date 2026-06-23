@@ -11,7 +11,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { sql, eq, and, like, or, desc } from "drizzle-orm";
 import {
-  pgTable, serial, text, integer, real, timestamp,
+  pgTable, serial, text, integer, real, timestamp, boolean,
 } from "drizzle-orm/pg-core";
 
 // ─── Schema ────────────────────────────────────────────────────────────────
@@ -90,7 +90,7 @@ export const flags = pgTable("flags", {
   lineItemId: integer("line_item_id"),
   flagType:   text("flag_type").notNull(),
   message:    text("message").notNull(),
-  resolved:   integer("resolved").notNull().default(0),
+  resolved:   boolean("resolved").notNull().default(false),
   resolvedBy: text("resolved_by"),
   resolvedAt: timestamp("resolved_at"),
   createdAt:  timestamp("created_at").defaultNow(),

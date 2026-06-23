@@ -93,7 +93,7 @@ export async function POST() {
         line_item_id INTEGER,
         flag_type TEXT NOT NULL,
         message TEXT NOT NULL,
-        resolved INTEGER NOT NULL DEFAULT 0,
+        resolved BOOLEAN NOT NULL DEFAULT FALSE,
         resolved_by TEXT,
         resolved_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ DEFAULT NOW()
