@@ -143,7 +143,7 @@ export default function SummaryPage() {
             </div>
             <div>
               <p style={{ fontSize: 13, fontWeight: 600, color: "#991b1b", marginBottom: 6 }}>
-                ⚠️ {reconciliationAlerts.length} receipt{reconciliationAlerts.length !== 1 ? "s" : ""} with amount mismatch — needs manual review
+                ⚠️ {reconciliationAlerts.length} receipt{reconciliationAlerts.length !== 1 ? "s" : ""} with unresolved amount mismatch
               </p>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {reconciliationAlerts.map((a: any) => (
@@ -151,6 +151,7 @@ export default function SummaryPage() {
                     <Link href="/dashboard/receipts" style={{ fontSize: 12, fontWeight: 600, color: "#dc2626", textDecoration: "none", minWidth: 120 }}>
                       #{a.receiptId} {a.merchantName}
                     </Link>
+                    <span className={`badge badge-${a.status}`} style={{ fontSize: 10 }}>{a.status}</span>
                     <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
                       Declared <strong style={{ color: "var(--text)" }}>{fmtFull(a.declaredTotal)}</strong> vs
                       Computed <strong style={{ color: "var(--text)" }}>{fmtFull(a.computedTotal)}</strong>

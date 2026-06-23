@@ -131,16 +131,16 @@ export async function GET(request: NextRequest) {
 
     // ── Reconciliation alerts (flagged receipts with variance) ─
     const reconciliationRows = rows<{
-      id: number; merchant_name: string | null; receipt_type: string;
+      id: number; merchant_name: string | null; receipt_type: string; status: string;
       declared_total: number; computed_total: number; confidence: number;
       flag_type: string; flag_message: string;
     }>(await pg().unsafe(`
-      SELECT r.id, r.merchant_name, r.receipt_type,
+      SELECT r.id, r.merchant_name, r.receipt_type, r.status,
              r.declared_total, r.computed_total, r.confidence,
              f.flag_type, f.message AS flag_message
       FROM receipts r
       JOIN flags f ON f.receipt_id = r.id
-      WHERE r.status = 'flagged' AND f.resolved = FALSE
+      WHERE f.resolved = FALSE
         AND f.flag_type IN ('MATH_ERROR', 'MISSING_INVOICE_NO')
       ORDER BY ABS(r.declared_total - r.computed_total) DESC
       LIMIT 5
@@ -149,6 +149,7 @@ export async function GET(request: NextRequest) {
       receiptId:       r.id,
       merchantName:    r.merchant_name ?? "—",
       receiptType:     r.receipt_type,
+      status:         r.status,
       declaredTotal:   Number(r.declared_total),
       computedTotal:  Number(r.computed_total),
       variance:        Math.abs(Number(r.declared_total) - Number(r.computed_total)),
