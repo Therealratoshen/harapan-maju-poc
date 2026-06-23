@@ -141,6 +141,7 @@ export default function FlagsPage() {
             const colors = sev === "critical" ? { bg: "rgba(220,38,38,0.08)", border: "rgba(220,38,38,0.2)", text: "var(--danger)" }
                             : sev === "warning"  ? { bg: "rgba(217,119,6,0.08)",  border: "rgba(217,119,6,0.2)", text: "var(--warning)" }
                             :                         { bg: "rgba(8,145,178,0.08)",   border: "rgba(8,145,178,0.2)",  text: "var(--accent)" };
+            const unresolved = fc.unresolved ?? fc.count;
             return (
               <div key={fc.flagType} style={{
                 display: "flex", alignItems: "center", gap: 6,
@@ -148,7 +149,12 @@ export default function FlagsPage() {
                 background: colors.bg, border: `1px solid ${colors.border}`, color: colors.text,
               }}>
                 <span style={{ width: 6, height: 6, borderRadius: "50%", background: colors.text, display: "inline-block" }} />
-                {fc.flagType.replace(/_/g, " ")}: <strong>{fc.unresolved ?? fc.count}</strong>
+                {fc.flagType.replace(/_/g, " ")}: <strong>{unresolved} flag{unresolved !== 1 ? "s" : ""}</strong>
+                {fc.receiptCount > 0 && (
+                  <span style={{ color: "var(--text-secondary)", fontWeight: 400, fontSize: 11 }}>
+                    · {fc.receiptCount} receipt{fc.receiptCount !== 1 ? "s" : ""}
+                  </span>
+                )}
               </div>
             );
           })}

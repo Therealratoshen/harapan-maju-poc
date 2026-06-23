@@ -224,11 +224,15 @@ export default function SummaryPage() {
                 <XAxis dataKey="month" tick={{ fontSize: 11, fill: "var(--text-secondary)" }} />
                 <YAxis tickFormatter={fmt} tick={{ fontSize: 10, fill: "var(--text-secondary)" }} width={56} />
                 <Tooltip
-                  formatter={(v: any) => [fmtFull(Number(v)), ""]}
+                  formatter={(v, name) => {
+                    const labels: Record<string,string> = { revenue: "Revenue", cogs: "COGS", profit: "Gross Profit" };
+                    return [fmtFull(Math.abs(Number(v))), labels[String(name)] ?? String(name)];
+                  }}
                   contentStyle={{ borderRadius: 8, border: "1px solid var(--border)", fontSize: 12, background: "var(--surface)" }}
                 />
-                <Bar dataKey="revenue" name="Revenue" fill="var(--revenue)" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="cogs"    name="COGS"    fill="#cbd5e1"    radius={[4, 4, 0, 0]} />
+                <Bar dataKey="revenue" name="Revenue"     fill="var(--revenue)" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="cogs"    name="COGS"         fill="#cbd5e1"    radius={[4, 4, 0, 0]} />
+                <Bar dataKey="profit" name="Gross Profit" fill="var(--profit)" radius={[4, 4, 0, 0]} />
               </RechartsBarChart>
             </ResponsiveContainer>
           ) : (
@@ -244,6 +248,10 @@ export default function SummaryPage() {
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{ width: 10, height: 10, borderRadius: 2, background: "#cbd5e1", display: "inline-block" }} />
               <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>COGS</span>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 10, height: 10, borderRadius: 2, background: "var(--profit)", display: "inline-block" }} />
+              <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>Gross Profit</span>
             </div>
           </div>
         </div>

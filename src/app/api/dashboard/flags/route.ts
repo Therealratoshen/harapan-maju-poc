@@ -27,12 +27,13 @@ export async function GET() {
     let flagCounts: any[] = [];
     try {
       const flagCountsRaw: any[] = await db.execute(
-        sql`SELECT flag_type, COUNT(*) as count, SUM(CASE WHEN resolved = FALSE THEN 1 ELSE 0 END) as unresolved FROM flags GROUP BY flag_type`
+        sql`SELECT flag_type, COUNT(*)::int as count, SUM(CASE WHEN resolved = FALSE THEN 1 ELSE 0 END)::int as unresolved, COUNT(DISTINCT receipt_id)::int as receipt_count FROM flags GROUP BY flag_type`
       );
       flagCounts = flagCountsRaw.map((r: any) => ({
-        flagType: r.flag_type,
-        count: Number(r.count ?? 0),
-        unresolved: Number(r.unresolved ?? 0),
+        flagType:     r.flag_type,
+        count:        Number(r.count ?? 0),
+        unresolved:   Number(r.unresolved ?? 0),
+        receiptCount: Number(r.receipt_count ?? 0),
       }));
     } catch (e: any) {
       console.error("[flags/agg]", e?.message ?? e);

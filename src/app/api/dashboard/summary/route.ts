@@ -66,15 +66,16 @@ export async function GET(request: NextRequest) {
       .from(schema.receipts)
       .where(and(...baseApproved));
 
-    const monthlyMap: Record<string, { month: string; revenue: number; cogs: number }> = {};
+    const monthlyMap: Record<string, { month: string; revenue: number; cogs: number; profit: number }> = {};
     for (const r of allApproved) {
-      const d   = new Date(r.receiptDate!);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const d    = new Date(r.receiptDate!);
+      const key  = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
       const label = d.toLocaleDateString("en", { month: "short", year: "numeric" });
-      if (!monthlyMap[key]) monthlyMap[key] = { month: label, revenue: 0, cogs: 0 };
+      if (!monthlyMap[key]) monthlyMap[key] = { month: label, revenue: 0, cogs: 0, profit: 0 };
       if (r.receiptType === "supplier") monthlyMap[key].revenue += Number(r.declaredTotal);
       if (r.receiptType === "buyer")    monthlyMap[key].cogs    += Number(r.declaredTotal);
     }
+    for (const m of Object.values(monthlyMap)) { m.profit = m.revenue - m.cogs; }
     const monthly = Object.values(monthlyMap).reverse();
 
     // ── COGS by Supplier (NEW) ─────────────────────────
