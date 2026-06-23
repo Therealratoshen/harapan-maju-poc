@@ -138,7 +138,7 @@ export async function GET(request: NextRequest) {
       flagSummary,
     });
   } catch (err) {
-    console.error(err);
-    return NextResponse.json({ error: "Failed to fetch summary" }, { status: 500 });
+    console.error("[summary]", err instanceof Error ? err.message : String(err));
+    return NextResponse.json({ error: "Failed to fetch summary", detail: err instanceof Error ? err.message : String(err) }, { status: 500 });
   }
 }
