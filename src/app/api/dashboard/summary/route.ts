@@ -48,7 +48,7 @@ export async function GET(request: NextRequest) {
     const [flagCountResult] = await db
       .select({ count: sql<number>`COUNT(*)` })
       .from(schema.flags)
-      .where(eq(schema.flags.resolved, 0));
+      .where(sql`resolved = 0`);
 
     // ── Monthly grouping ────────────────────────────────
     const allApproved = await db
@@ -102,7 +102,7 @@ export async function GET(request: NextRequest) {
         count:    sql<number>`COUNT(*)`,
       })
       .from(schema.flags)
-      .where(eq(schema.flags.resolved, 0))
+      .where(sql`resolved = 0`)
       .groupBy(schema.flags.flagType);
 
     // ── Computed ────────────────────────────────────────

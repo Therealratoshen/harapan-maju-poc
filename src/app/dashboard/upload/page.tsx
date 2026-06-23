@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 
 function formatDate(d: string | Date | null) {
   if (!d) return "—";
@@ -37,7 +37,7 @@ export default function UploadPage() {
   }, []);
 
   // Load on mount
-  useState(() => { loadRecent(); });
+  useEffect(() => { loadRecent(); }, [loadRecent]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];

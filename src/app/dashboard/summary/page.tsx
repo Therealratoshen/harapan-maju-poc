@@ -92,7 +92,7 @@ export default function SummaryPage() {
       <div style={{ marginBottom: 24, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, color: "var(--text)", letterSpacing: "-0.02em", marginBottom: 4 }}>
-            {greeting}, Full House
+            {greeting}, Owner
           </h1>
           <p style={{ fontSize: 13, color: "var(--text-secondary)" }}>{formatDateLong()}</p>
         </div>
