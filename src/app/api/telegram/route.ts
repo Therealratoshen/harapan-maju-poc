@@ -407,7 +407,7 @@ async function onText(chatId: number, text: string) {
   // ── flags ──────────────────────────────────────────────────────────────
   if (t.includes("flag") || t.includes("masalah")) {
     const flagRows = await db.execute(sql<{ flag_type: string; unresolved: number }>`
-      SELECT flag_type, COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)::int AS unresolved
+      SELECT flag_type, COALESCE(SUM(CASE WHEN resolved = FALSE THEN 1 ELSE 0 END), 0)::int AS unresolved
       FROM flags GROUP BY flag_type
     `);
     const rows = (flagRows as any[]);

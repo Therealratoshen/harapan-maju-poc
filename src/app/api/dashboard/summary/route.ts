@@ -57,7 +57,7 @@ export async function GET(request: NextRequest) {
       .from(schema.receipts)
       .where(and(...allIdrConditions, eq(schema.receipts.status, "pending")));
 
-    const flagCountResult = (await pg().unsafe(`SELECT COUNT(*)::int AS count FROM flags WHERE resolved = 0`)) as any[];
+    const flagCountResult = (await pg().unsafe(`SELECT COUNT(*)::int AS count FROM flags WHERE resolved = FALSE`)) as any[];
 
     // ── Monthly grouping ────────────────────────────────
     const allApproved = await db
@@ -105,7 +105,7 @@ export async function GET(request: NextRequest) {
       .limit(10);
 
     // ── Flag summary ───────────────────────────────────
-    const flagSummaryRows = rows<{ flag_type: string; count: number }>(await pg().unsafe(`SELECT flag_type, COUNT(*)::int AS count FROM flags WHERE resolved = 0 GROUP BY flag_type`));
+    const flagSummaryRows = rows<{ flag_type: string; count: number }>(await pg().unsafe(`SELECT flag_type, COUNT(*)::int AS count FROM flags WHERE resolved = FALSE GROUP BY flag_type`));
     const flagSummary = flagSummaryRows.map(r => ({ flagType: r.flag_type, count: Number(r.count ?? 0) }));
 
     // ── Computed ────────────────────────────────────────
