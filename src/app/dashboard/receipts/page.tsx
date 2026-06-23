@@ -30,6 +30,16 @@ export default function ReceiptsPage() {
   const [rejectId,   setRejectId]   = useState<number | null>(null);
   const [rejectNote, setRejectNote] = useState("");
 
+  // ── Edit modal state ────────────────────────────────────
+  const [editReceipt,   setEditReceipt]   = useState<any | null>(null);
+  const [editLineItems, setEditLineItems] = useState<any[]>([]);
+  const [editDeclaredTotal, setEditDeclaredTotal] = useState<number>(0);
+  const [editMerchant,   setEditMerchant]   = useState("");
+  const [editInvoice,    setEditInvoice]    = useState("");
+  const [editDate,       setEditDate]        = useState("");
+  const [editSaving,     setEditSaving]      = useState(false);
+  const [editNewItem,    setEditNewItem]    = useState({ description: "", quantity: "1", unit: "pcs", unitPrice: "0", totalPrice: "" });
+
   const load = useCallback(() => {
     const params = new URLSearchParams();
     if (status !== "all") params.set("status", status);
@@ -90,6 +100,120 @@ export default function ReceiptsPage() {
       setProcessing(null);
     }
   };
+
+  // ── Open edit modal ────────────────────────────────────
+  const openEdit = async (receipt: any) => {
+    setEditReceipt(receipt);
+    setEditMerchant(receipt.merchantName ?? "");
+    setEditInvoice(receipt.invoiceNumber ?? "");
+    setEditDate(receipt.receiptDate ? new Date(receipt.receiptDate).toISOString().slice(0, 10) : "");
+    setEditDeclaredTotal(receipt.declaredTotal ?? 0);
+    setEditNewItem({ description: "", quantity: "1", unit: "pcs", unitPrice: "0", totalPrice: "" });
+
+    // Load line items
+    try {
+      const res  = await fetch(`/api/receipts/${receipt.id}/line-items`);
+      const data = await res.json();
+      setEditLineItems(data.items ?? data.lineItems ?? []);
+    } catch {
+      setEditLineItems([]);
+    }
+  };
+
+  // ── Save edit ──────────────────────────────────────────
+  const handleSaveEdit = async () => {
+    if (!editReceipt) return;
+    setEditSaving(true);
+    try {
+      // Update receipt metadata
+      await fetch(`/api/receipts/${editReceipt.id}`, {
+        method:  "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          merchantName:   editMerchant,
+          invoiceNumber:  editInvoice,
+          receiptDate:    editDate,
+          declaredTotal: editDeclaredTotal,
+        }),
+      });
+
+      // Run recheck (recalculate computed_total + update flags)
+      await fetch(`/api/receipts/${editReceipt.id}/recheck`, { method: "POST" });
+
+      showToast(`Receipt #${editReceipt.id} updated`, "success");
+      setEditReceipt(null);
+      load();
+    } catch {
+      showToast("Save failed — try again", "error");
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  // ── Line item CRUD in modal ───────────────────────────
+  const updateLocalItem = (index: number, field: string, value: string) => {
+    const updated = [...editLineItems];
+    const item    = { ...updated[index] };
+
+    if (field === "unitPrice" || field === "quantity") {
+      item[field] = parseInt(value) || 0;
+      item.totalPrice = item.quantity * item.unitPrice;
+    } else {
+      (item as any)[field] = value;
+    }
+    updated[index] = item;
+    setEditLineItems(updated);
+  };
+
+  const deleteLocalItem = async (index: number) => {
+    const item = editLineItems[index];
+    if (!item.id) { setEditLineItems(editLineItems.filter((_, i) => i !== index)); return; }
+    await fetch(`/api/receipts/${editReceipt!.id}/line-items/${item.id}`, { method: "DELETE" });
+    setEditLineItems(editLineItems.filter((_, i) => i !== index));
+  };
+
+  const addLineItem = async () => {
+    if (!editReceipt) return;
+    const ni = editNewItem;
+    const res = await fetch(`/api/receipts/${editReceipt.id}/line-items`, {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        description: ni.description,
+        quantity:    parseFloat(ni.quantity) || 1,
+        unit:        ni.unit,
+        unitPrice:  parseInt(ni.unitPrice) || 0,
+      }),
+    });
+    const data = await res.json();
+    if (data.lineItem) setEditLineItems([...editLineItems, data.lineItem]);
+    setEditNewItem({ description: "", quantity: "1", unit: "pcs", unitPrice: "0", totalPrice: "" });
+  };
+
+  const saveItem = async (index: number) => {
+    const item = editLineItems[index];
+    if (!item.id) return;
+    const res = await fetch(`/api/receipts/${editReceipt!.id}/line-items/${item.id}`, {
+      method:  "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        description: item.rawDescription,
+        quantity:    item.quantity,
+        unit:        item.unit,
+        unitPrice:  item.unitPrice,
+      }),
+    });
+    const data = await res.json();
+    if (data.lineItem) {
+      const updated = [...editLineItems];
+      updated[index] = data.lineItem;
+      setEditLineItems(updated);
+    }
+  };
+
+  const computedTotal = editLineItems.reduce((s, i) => s + (i.totalPrice ?? 0), 0);
+  const variance     = Math.abs(editDeclaredTotal - computedTotal);
+  const variancePct  = computedTotal > 0 ? (variance / computedTotal) * 100 : 0;
 
   const counts = {
     all:      receipts.length,
@@ -321,6 +445,16 @@ export default function ReceiptsPage() {
                                 🔄 Re-OCR
                               </button>
                             )}
+                            {/* Edit button — always available for pending/flagged */}
+                            {(r.status === "pending" || r.status === "flagged") && (
+                              <button
+                                className="btn btn-sm"
+                                style={{ background: "rgba(0,229,255,0.08)", color: "var(--accent)", border: "1px solid rgba(0,229,255,0.3)", fontWeight: 600 }}
+                                onClick={() => openEdit(r)}
+                              >
+                                ✏️ Edit
+                              </button>
+                            )}
                             <button
                               className="btn btn-sm btn-success"
                               disabled={actioning === r.id}
@@ -449,6 +583,399 @@ export default function ReceiptsPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Edit Receipt Modal ──────────────────────────────── */}
+      {editReceipt && (
+        <div
+          style={{
+            position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 1000,
+            display: "flex", alignItems: "flex-start", justifyContent: "center",
+            padding: "24px 16px", overflowY: "auto",
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setEditReceipt(null); }}
+        >
+          <div
+            style={{
+              background: "var(--surface-raised)", border: "1px solid var(--border-default)",
+              borderRadius: 16, width: "100%", maxWidth: 820,
+              display: "flex", flexDirection: "column", gap: 0,
+              boxShadow: "0 32px 80px rgba(0,0,0,0.6)",
+            }}
+          >
+            {/* ── Modal header ── */}
+            <div style={{
+              padding: "20px 24px", borderBottom: "1px solid var(--border-subtle)",
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 18 }}>✏️</span>
+                <div>
+                  <p style={{ fontWeight: 700, fontSize: 15, color: "var(--text)" }}>
+                    Edit Receipt #{editReceipt.id}
+                  </p>
+                  <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                    {editReceipt.receiptType === "buyer" ? "Supplier Purchase" : "Customer Sale"}
+                  </p>
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span className={`badge badge-${editReceipt.status}`} style={{ fontSize: 10 }}>
+                  {editReceipt.status}
+                </span>
+                <button
+                  onClick={() => setEditReceipt(null)}
+                  style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-secondary)", padding: 4, lineHeight: 1 }}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* ── Metadata row ── */}
+            <div style={{
+              padding: "16px 24px", borderBottom: "1px solid var(--border-subtle)",
+              display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12,
+            }}>
+              <div>
+                <label style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: 5 }}>
+                  Merchant / Supplier
+                </label>
+                <input
+                  value={editMerchant}
+                  onChange={e => setEditMerchant(e.target.value)}
+                  style={{
+                    width: "100%", background: "var(--surface-alt)", border: "1px solid var(--border-default)",
+                    borderRadius: 8, padding: "7px 10px", fontSize: 13, color: "var(--text)", outline: "none",
+                    boxSizing: "border-box",
+                  }}
+                  onFocus={e => (e.target.style.borderColor = "var(--accent)")}
+                  onBlur={e => (e.target.style.borderColor = "var(--border-default)")}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: 5 }}>
+                  Invoice Number
+                </label>
+                <input
+                  value={editInvoice}
+                  onChange={e => setEditInvoice(e.target.value)}
+                  placeholder="e.g. INV-001"
+                  style={{
+                    width: "100%", background: "var(--surface-alt)", border: "1px solid var(--border-default)",
+                    borderRadius: 8, padding: "7px 10px", fontSize: 13, color: "var(--text)", outline: "none",
+                    boxSizing: "border-box", fontFamily: "var(--font-mono)",
+                  }}
+                  onFocus={e => (e.target.style.borderColor = "var(--accent)")}
+                  onBlur={e => (e.target.style.borderColor = "var(--border-default)")}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: 5 }}>
+                  Receipt Date
+                </label>
+                <input
+                  type="date"
+                  value={editDate}
+                  onChange={e => setEditDate(e.target.value)}
+                  style={{
+                    width: "100%", background: "var(--surface-alt)", border: "1px solid var(--border-default)",
+                    borderRadius: 8, padding: "7px 10px", fontSize: 13, color: "var(--text)", outline: "none",
+                    boxSizing: "border-box",
+                  }}
+                  onFocus={e => (e.target.style.borderColor = "var(--accent)")}
+                  onBlur={e => (e.target.style.borderColor = "var(--border-default)")}
+                />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "var(--text-secondary)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: 5 }}>
+                  Declared Total (Rp)
+                </label>
+                <input
+                  type="number"
+                  value={editDeclaredTotal}
+                  onChange={e => setEditDeclaredTotal(parseInt(e.target.value) || 0)}
+                  style={{
+                    width: "100%", background: "var(--surface-alt)", border: "1px solid var(--border-default)",
+                    borderRadius: 8, padding: "7px 10px", fontSize: 13, color: "var(--text)", outline: "none",
+                    boxSizing: "border-box", fontFamily: "var(--font-mono)",
+                  }}
+                  onFocus={e => (e.target.style.borderColor = "var(--accent)")}
+                  onBlur={e => (e.target.style.borderColor = "var(--border-default)")}
+                />
+              </div>
+            </div>
+
+            {/* ── Financials summary ── */}
+            <div style={{
+              padding: "12px 24px", borderBottom: "1px solid var(--border-subtle)",
+              display: "flex", alignItems: "center", gap: 24, flexWrap: "wrap",
+            }}>
+              <div>
+                <p style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 2 }}>Computed from {editLineItems.length} line item{editLineItems.length !== 1 ? "s" : ""}</p>
+                <p style={{ fontSize: 18, fontWeight: 700, fontFamily: "var(--font-mono)", color: "var(--text)" }}>
+                  {fmtFull(computedTotal)}
+                </p>
+              </div>
+              <div style={{ width: 1, height: 32, background: "var(--border-subtle)" }} />
+              <div>
+                <p style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 2 }}>Variance</p>
+                <p style={{
+                  fontSize: 18, fontWeight: 700, fontFamily: "var(--font-mono)",
+                  color: variance === 0 ? "var(--profit)" : "var(--danger)",
+                }}>
+                  {variance === 0 ? "✓ Matched" : `${variancePct > 0 ? "Δ" : ""}${variancePct.toFixed(1)}%`}
+                </p>
+              </div>
+              <div style={{ width: 1, height: 32, background: "var(--border-subtle)" }} />
+              <div>
+                <p style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 2 }}>Line items</p>
+                <p style={{ fontSize: 18, fontWeight: 700, color: "var(--accent)" }}>{editLineItems.length}</p>
+              </div>
+            </div>
+
+            {/* ── Line items table ── */}
+            <div style={{ padding: "0 24px", flex: 1 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 0 10px" }}>
+                <p style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>Line Items</p>
+                <button
+                  onClick={() => setEditLineItems([...editLineItems, { id: null, rawDescription: "", quantity: 1, unit: "pcs", unitPrice: 0, totalPrice: 0 }])}
+                  style={{
+                    background: "none", border: "1px dashed var(--border-default)", borderRadius: 8,
+                    padding: "5px 12px", fontSize: 12, color: "var(--accent)", cursor: "pointer",
+                    display: "flex", alignItems: "center", gap: 4,
+                  }}
+                >
+                  + Add row
+                </button>
+              </div>
+
+              {/* Table header */}
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 70px 80px 100px 100px 50px",
+                gap: 6, padding: "6px 8px",
+                borderRadius: 6, marginBottom: 4,
+                background: "var(--surface-alt)",
+              }}>
+                {["Description", "Qty", "Unit", "Unit Price", "Total", ""].map(h => (
+                  <span key={h} style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em" }}>{h}</span>
+                ))}
+              </div>
+
+              {/* Existing items */}
+              {editLineItems.length === 0 && (
+                <div style={{ textAlign: "center", padding: "24px 0", color: "var(--text-secondary)", fontSize: 13 }}>
+                  No line items. Add one below.
+                </div>
+              )}
+
+              {editLineItems.map((item, idx) => {
+                const isUnsaved = !item.id;
+                return (
+                  <div
+                    key={item.id ?? `new-${idx}`}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 70px 80px 100px 100px 50px",
+                      gap: 6, padding: "4px 8px",
+                      borderRadius: 8, marginBottom: 4,
+                      background: isUnsaved ? "rgba(0,229,255,0.04)" : "transparent",
+                      border: isUnsaved ? "1px dashed var(--accent)" : "1px solid transparent",
+                      alignItems: "center",
+                    }}
+                  >
+                    <input
+                      value={item.rawDescription ?? item.description ?? ""}
+                      onChange={e => updateLocalItem(idx, "rawDescription", e.target.value)}
+                      placeholder="Item description"
+                      style={{
+                        background: "var(--surface-alt)", border: "1px solid var(--border-default)",
+                        borderRadius: 6, padding: "5px 8px", fontSize: 12, color: "var(--text)", outline: "none",
+                      }}
+                      onFocus={e => (e.target.style.borderColor = "var(--accent)")}
+                      onBlur={e => (e.target.style.borderColor = "var(--border-default)")}
+                    />
+                    <input
+                      type="number"
+                      value={item.quantity}
+                      min={0}
+                      onChange={e => updateLocalItem(idx, "quantity", e.target.value)}
+                      style={{
+                        background: "var(--surface-alt)", border: "1px solid var(--border-default)",
+                        borderRadius: 6, padding: "5px 6px", fontSize: 12, color: "var(--text)", outline: "none",
+                        fontFamily: "var(--font-mono)", textAlign: "right",
+                      }}
+                      onFocus={e => (e.target.style.borderColor = "var(--accent)")}
+                      onBlur={e => (e.target.style.borderColor = "var(--border-default)")}
+                    />
+                    <input
+                      value={item.unit ?? "pcs"}
+                      onChange={e => updateLocalItem(idx, "unit", e.target.value)}
+                      style={{
+                        background: "var(--surface-alt)", border: "1px solid var(--border-default)",
+                        borderRadius: 6, padding: "5px 6px", fontSize: 12, color: "var(--text)", outline: "none",
+                      }}
+                      onFocus={e => (e.target.style.borderColor = "var(--accent)")}
+                      onBlur={e => (e.target.style.borderColor = "var(--border-default)")}
+                    />
+                    <input
+                      type="number"
+                      value={item.unitPrice ?? 0}
+                      min={0}
+                      onChange={e => updateLocalItem(idx, "unitPrice", e.target.value)}
+                      placeholder="0"
+                      style={{
+                        background: "var(--surface-alt)", border: "1px solid var(--border-default)",
+                        borderRadius: 6, padding: "5px 6px", fontSize: 12, color: "var(--text)", outline: "none",
+                        fontFamily: "var(--font-mono)", textAlign: "right",
+                      }}
+                      onFocus={e => (e.target.style.borderColor = "var(--accent)")}
+                      onBlur={e => (e.target.style.borderColor = "var(--border-default)")}
+                    />
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", fontFamily: "var(--font-mono)", textAlign: "right" }}>
+                      {fmtFull((item.quantity ?? 0) * (item.unitPrice ?? 0))}
+                    </span>
+                    <div style={{ display: "flex", gap: 2, justifyContent: "flex-end" }}>
+                      {isUnsaved ? (
+                        <button
+                          onClick={() => addLineItem().then(() => {})}
+                          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "var(--profit)", padding: "2px 4px" }}
+                          title="Save this row"
+                        >
+                          ✓
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => saveItem(idx)}
+                          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "var(--accent)", padding: "2px 4px" }}
+                          title="Save item"
+                        >
+                          💾
+                        </button>
+                      )}
+                      <button
+                        onClick={() => deleteLocalItem(idx)}
+                        style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, color: "var(--danger)", padding: "2px 4px" }}
+                        title="Remove"
+                      >
+                        🗑
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+
+              {/* Quick-add row */}
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 70px 80px 100px auto",
+                gap: 6, padding: "8px",
+                borderRadius: 8, margin: "8px 0 16px",
+                background: "rgba(0,229,255,0.03)", border: "1px dashed var(--border-subtle)",
+                alignItems: "center",
+              }}>
+                <input
+                  value={editNewItem.description}
+                  onChange={e => setEditNewItem({ ...editNewItem, description: e.target.value })}
+                  placeholder="New item description…"
+                  style={{
+                    background: "var(--surface-alt)", border: "1px solid var(--border-default)",
+                    borderRadius: 6, padding: "5px 8px", fontSize: 12, color: "var(--text)", outline: "none",
+                  }}
+                  onFocus={e => (e.target.style.borderColor = "var(--accent)")}
+                  onBlur={e => (e.target.style.borderColor = "var(--border-default)")}
+                />
+                <input
+                  type="number"
+                  value={editNewItem.quantity}
+                  min={1}
+                  onChange={e => setEditNewItem({ ...editNewItem, quantity: e.target.value })}
+                  style={{
+                    background: "var(--surface-alt)", border: "1px solid var(--border-default)",
+                    borderRadius: 6, padding: "5px 6px", fontSize: 12, color: "var(--text)", outline: "none",
+                    fontFamily: "var(--font-mono)", textAlign: "right",
+                  }}
+                  onFocus={e => (e.target.style.borderColor = "var(--accent)")}
+                  onBlur={e => (e.target.style.borderColor = "var(--border-default)")}
+                />
+                <input
+                  value={editNewItem.unit}
+                  onChange={e => setEditNewItem({ ...editNewItem, unit: e.target.value })}
+                  style={{
+                    background: "var(--surface-alt)", border: "1px solid var(--border-default)",
+                    borderRadius: 6, padding: "5px 6px", fontSize: 12, color: "var(--text)", outline: "none",
+                  }}
+                  onFocus={e => (e.target.style.borderColor = "var(--accent)")}
+                  onBlur={e => (e.target.style.borderColor = "var(--border-default)")}
+                />
+                <input
+                  type="number"
+                  value={editNewItem.unitPrice}
+                  min={0}
+                  onChange={e => setEditNewItem({ ...editNewItem, unitPrice: e.target.value })}
+                  placeholder="Rp"
+                  style={{
+                    background: "var(--surface-alt)", border: "1px solid var(--border-default)",
+                    borderRadius: 6, padding: "5px 6px", fontSize: 12, color: "var(--text)", outline: "none",
+                    fontFamily: "var(--font-mono)", textAlign: "right",
+                  }}
+                  onFocus={e => (e.target.style.borderColor = "var(--accent)")}
+                  onBlur={e => (e.target.style.borderColor = "var(--border-default)")}
+                />
+                <button
+                  onClick={addLineItem}
+                  style={{
+                    background: "var(--accent)", border: "none", borderRadius: 8,
+                    padding: "7px 14px", fontSize: 12, fontWeight: 600, color: "#000", cursor: "pointer",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  + Add
+                </button>
+              </div>
+            </div>
+
+            {/* ── Modal footer ── */}
+            <div style={{
+              padding: "16px 24px", borderTop: "1px solid var(--border-subtle)",
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+              gap: 12, flexWrap: "wrap",
+            }}>
+              <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                Computed total: <strong style={{ color: "var(--text)" }}>{fmtFull(computedTotal)}</strong>
+                {" "}
+                {variance > 0 && (
+                  <span style={{ color: "var(--danger)" }}>· Variance {variancePct.toFixed(1)}%</span>
+                )}
+              </p>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  onClick={() => setEditReceipt(null)}
+                  style={{
+                    background: "var(--surface-alt)", border: "1px solid var(--border-default)",
+                    borderRadius: 10, padding: "9px 18px", fontSize: 13, fontWeight: 600,
+                    color: "var(--text-secondary)", cursor: "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveEdit}
+                  disabled={editSaving}
+                  style={{
+                    background: editSaving ? "var(--surface-alt)" : "var(--accent)",
+                    border: "none", borderRadius: 10, padding: "9px 18px",
+                    fontSize: 13, fontWeight: 700, color: "#000", cursor: editSaving ? "wait" : "pointer",
+                    opacity: editSaving ? 0.7 : 1, display: "flex", alignItems: "center", gap: 6,
+                  }}
+                >
+                  {editSaving ? "💾 Saving…" : "💾 Save & Check Flags"}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
