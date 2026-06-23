@@ -30,6 +30,11 @@ function err(message: string): McpError {
   return { content: [{ type: "text", text: JSON.stringify({ error: message }) }], isError: true };
 }
 
+// Safe accessor for db.execute() results — handles both array and {rows:[]} return types
+function rows<T>(result: any): T[] {
+  return Array.isArray(result) ? result : (result?.rows ?? []);
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
 function rp(n: number) {
@@ -100,17 +105,13 @@ export async function handleGetSummary(): Promise<McpResult> {
       .from(schema.lineItems);
 
     // Flag summary
-    const flagRows = await db.execute(sql<{
-      flag_type: string;
-      unresolved: number;
-      total: number;
-    }>`
+    const flagRows = await db.execute(sql`
       SELECT flag_type,
-             COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)::int AS unresolved,
+             COALESCE(SUM(CASE WHEN resolved IS FALSE THEN 1 ELSE 0 END), 0)::int AS unresolved,
              COUNT(*)::int AS total
       FROM flags GROUP BY flag_type
     `);
-    const flagSummary = (flagRows as any[]).map(r => ({
+    const flagSummary = rows<{ flag_type: string; unresolved: number; total: number }>(flagRows).map(r => ({
       flagType: r.flag_type,
       unresolved: Number(r.unresolved ?? 0),
       total: Number(r.total ?? 0),
@@ -199,7 +200,7 @@ export async function handleGetFlags(args: Record<string, unknown>): Promise<Mcp
     const flagType = args.flagType as string | undefined;
 
     const conds: any[] = [];
-    if (unresolvedOnly) conds.push(eq(schema.flags.resolved, 0));
+    if (unresolvedOnly) conds.push(eq(schema.flags.resolved, false as any));
     if (flagType)       conds.push(eq(schema.flags.flagType, flagType));
 
     const flags = await db
@@ -250,18 +251,22 @@ export async function handleGetStock(args: Record<string, unknown>): Promise<Mcp
       ORDER BY sl.sku_id
     `);
 
-    let stock = (stockData as any[]).map((row) => {
-      const inQty = Number(row.in_qty ?? 0);
+    let stock = rows<{
+      sku_id: number; normalized_name: string | null;
+      part_number: string | null; category: string | null; unit: string | null;
+      in_qty: number; out_qty: number; stock_value: number;
+    }>(stockData).map((row) => {
+      const inQty  = Number(row.in_qty ?? 0);
       const outQty = Number(row.out_qty ?? 0);
       return {
-        skuId:     row.sku_id,
-        skuName:   row.normalized_name ?? "Unknown",
+        skuId:      row.sku_id,
+        skuName:    row.normalized_name ?? "Unknown",
         partNumber: row.part_number,
-        category:  row.category ?? "uncategorized",
-        unit:      row.unit ?? "pcs",
-        stockIn:   inQty,
-        stockOut:  outQty,
-        balance:   inQty - outQty,
+        category:   row.category ?? "uncategorized",
+        unit:       row.unit ?? "pcs",
+        stockIn:    inQty,
+        stockOut:   outQty,
+        balance:    inQty - outQty,
         stockValue: Number(row.stock_value ?? 0),
       };
     });
@@ -312,7 +317,9 @@ export async function handleGetRevenueTrends(args: Record<string, unknown>): Pro
       ORDER BY month
     `);
 
-    const formatted = (trends as any[]).map(r => ({
+    const formatted = rows<{
+      month: string; total_revenue: number; total_cogs: number; receipt_count: number;
+    }>(trends).map(r => ({
       month: r.month,
       totalRevenue: Number(r.total_revenue ?? 0),
       totalCOGS:    Number(r.total_cogs ?? 0),
@@ -346,7 +353,9 @@ export async function handleGetTopMerchants(args: Record<string, unknown>): Prom
       LIMIT ${limit}
     `);
 
-    const formatted = (merchants as any[]).map(r => ({
+    const formatted = rows<{
+      merchant_name: string | null; total_value: number; receipt_count: number;
+    }>(merchants).map(r => ({
       merchantName: r.merchant_name ?? "—",
       totalValue:   Number(r.total_value ?? 0),
       receiptCount: Number(r.receipt_count ?? 0),
