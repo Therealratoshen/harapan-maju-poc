@@ -52,10 +52,7 @@ export async function GET(request: NextRequest) {
       .where(and(...allIdrConditions))
       .groupBy(schema.receipts.receiptType);
 
-    const pendingReceipts = await db
-      .select({ count: sql<number>`COUNT(*)` })
-      .from(schema.receipts)
-      .where(and(...allIdrConditions, eq(schema.receipts.status, "pending")));
+    const pendingReceipts = (await pg().unsafe(`SELECT COUNT(*)::int AS count FROM receipts WHERE currency = 'IDR' AND status IN ('pending','flagged')`)) as any[];
 
     const flagCountResult = (await pg().unsafe(`SELECT COUNT(*)::int AS count FROM flags WHERE resolved = FALSE`)) as any[];
 
