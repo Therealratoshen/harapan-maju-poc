@@ -45,10 +45,7 @@ export async function GET(request: NextRequest) {
       .from(schema.receipts)
       .where(and(...allIdrConditions, eq(schema.receipts.status, "pending")));
 
-    const [flagCountResult] = await db
-      .select({ count: sql<number>`COUNT(*)` })
-      .from(schema.flags)
-      .where(sql`resolved = 0`);
+    const [flagCountResult] = await db.execute(sql`SELECT COUNT(*)::int AS count FROM flags WHERE resolved = 0`);
 
     // ── Monthly grouping ────────────────────────────────
     const allApproved = await db
@@ -96,14 +93,15 @@ export async function GET(request: NextRequest) {
       .limit(10);
 
     // ── Flag summary ───────────────────────────────────
-    const flagSummary = await db
-      .select({
-        flagType: schema.flags.flagType,
-        count:    sql<number>`COUNT(*)`,
-      })
-      .from(schema.flags)
-      .where(sql`resolved = 0`)
-      .groupBy(schema.flags.flagType);
+    const flagSummaryRows = await db.execute(sql`
+      SELECT flag_type, COUNT(*)::int AS count
+      FROM flags WHERE resolved = 0
+      GROUP BY flag_type
+    `);
+    const flagSummary = (Array.isArray(flagSummaryRows) ? flagSummaryRows : (flagSummaryRows as any).rows ?? []).map((r: any) => ({
+      flagType: r.flag_type,
+      count: Number(r.count ?? 0),
+    }));
 
     // ── Computed ────────────────────────────────────────
     const revenue    = Number(revenueResult?.total ?? 0);
