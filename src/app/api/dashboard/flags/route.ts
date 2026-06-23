@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { eq, desc, sql } from "drizzle-orm";
+import { sql as sqlT } from "drizzle-orm";
 
 // GET /api/dashboard/flags
 export async function GET() {
@@ -23,15 +24,19 @@ export async function GET() {
       .leftJoin(schema.receipts, sql`${schema.flags.receiptId} = ${schema.receipts.id}`)
       .orderBy(desc(schema.flags.id));
 
-    // Count by type
-    const flagCounts = await db
-      .select({
-        flagType: schema.flags.flagType,
-        count: sql<number>`COUNT(*)`,
-        unresolved: sql<number>`SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END)`,
-      })
-      .from(schema.flags)
-      .groupBy(schema.flags.flagType);
+    // Count by type — use raw SQL to avoid drizzle GROUP BY column name issues
+    const flagCountsRaw = await db
+      .execute(sql<{ flag_type: string; count: number; unresolved: number }>`
+        SELECT flag_type, COUNT(*) as count,
+               SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END) as unresolved
+        FROM flags
+        GROUP BY flag_type
+      `);
+    const flagCounts = flagCountsRaw.map(r => ({
+      flagType: r.flag_type,
+      count: Number(r.count ?? 0),
+      unresolved: Number(r.unresolved ?? 0),
+    }));
 
     return NextResponse.json({ flags, flagCounts });
   } catch (err: any) {

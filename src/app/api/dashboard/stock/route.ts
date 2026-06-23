@@ -5,33 +5,37 @@ import { eq, sql } from "drizzle-orm";
 // GET /api/dashboard/stock
 export async function GET() {
   try {
-    // Get stock balance per SKU
-    const stockData = await db
-      .select({
-        skuId: schema.stockLedger.skuId,
-        skuName: schema.skus.normalizedName,
-        partNumber: schema.skus.partNumber,
-        category: schema.skus.category,
-        unit: schema.skus.unit,
-        inQty: sql<number>`SUM(CASE WHEN movement_type = 'in' THEN quantity ELSE 0 END)`,
-        outQty: sql<number>`SUM(CASE WHEN movement_type = 'out' THEN quantity ELSE 0 END)`,
-        stockValue: sql<number>`SUM(CASE WHEN movement_type = 'in' THEN quantity * unit_price ELSE 0 END)`,
-      })
-      .from(schema.stockLedger)
-      .leftJoin(schema.skus, eq(schema.stockLedger.skuId, schema.skus.id))
-      .groupBy(schema.stockLedger.skuId, schema.skus.normalizedName)
-      .orderBy(schema.stockLedger.skuId);
+    // Raw SQL to avoid drizzle GROUP BY column qualification issues
+    const stockData = await db.execute(sql<{
+      sku_id: number; normalized_name: string | null; part_number: string | null;
+      category: string | null; unit: string | null;
+      in_qty: number; out_qty: number; stock_value: number;
+    }>`
+      SELECT
+        sl.sku_id,
+        COALESCE(s.normalized_name, 'Unknown') as normalized_name,
+        s.part_number,
+        s.category,
+        COALESCE(s.unit, 'pcs') as unit,
+        COALESCE(SUM(CASE WHEN sl.movement_type = 'in' THEN sl.quantity ELSE 0 END), 0) as in_qty,
+        COALESCE(SUM(CASE WHEN sl.movement_type = 'out' THEN sl.quantity ELSE 0 END), 0) as out_qty,
+        COALESCE(SUM(CASE WHEN sl.movement_type = 'in' THEN sl.quantity * sl.unit_price ELSE 0 END), 0) as stock_value
+      FROM stock_ledger sl
+      LEFT JOIN skus s ON sl.sku_id = s.id
+      GROUP BY sl.sku_id, s.normalized_name, s.part_number, s.category, s.unit
+      ORDER BY sl.sku_id
+    `);
 
     const stock = stockData.map((row) => ({
-      skuId: row.skuId,
-      skuName: row.skuName ?? "Unknown",
-      partNumber: row.partNumber,
+      skuId: row.sku_id,
+      skuName: row.normalized_name ?? "Unknown",
+      partNumber: row.part_number,
       category: row.category ?? "uncategorized",
       unit: row.unit ?? "pcs",
-      stockIn: Number(row.inQty),
-      stockOut: Number(row.outQty),
-      balance: Number(row.inQty) - Number(row.outQty),
-      stockValue: Number(row.stockValue),
+      stockIn: Number(row.in_qty ?? 0),
+      stockOut: Number(row.out_qty ?? 0),
+      balance: Number((row.in_qty ?? 0) - (row.out_qty ?? 0)),
+      stockValue: Number(row.stock_value ?? 0),
     }));
 
     // Current value = sum of (balance * avg unit price for remaining stock)
@@ -42,7 +46,7 @@ export async function GET() {
     }, 0);
 
     // Get unreconciled line items count
-    const unreconciledCount = await db
+    const [unreconciledResult] = await db
       .select({ count: sql<number>`COUNT(*)` })
       .from(schema.lineItems)
       .where(eq(schema.lineItems.matchStatus, "unmatched"));
@@ -50,7 +54,7 @@ export async function GET() {
     return NextResponse.json({
       stock,
       currentValue: Math.round(currentValue),
-      unreconciledCount: unreconciledCount[0]?.count ?? 0,
+      unreconciledCount: Number(unreconciledResult?.count ?? 0),
     });
   } catch (err: any) {
     console.error("[stock]", err?.message ?? err);
