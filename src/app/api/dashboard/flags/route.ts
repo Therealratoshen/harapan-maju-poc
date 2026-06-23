@@ -5,6 +5,7 @@ import { eq, desc, sql } from "drizzle-orm";
 // GET /api/dashboard/flags
 export async function GET() {
   try {
+    // Use raw SQL join to avoid drizzle column ordering issues
     const flags = await db
       .select({
         id: schema.flags.id,
@@ -19,8 +20,8 @@ export async function GET() {
         declaredTotal: schema.receipts.declaredTotal,
       })
       .from(schema.flags)
-      .leftJoin(schema.receipts, eq(schema.flags.receiptId, schema.receipts.id))
-      .orderBy(desc(schema.flags.createdAt));
+      .leftJoin(schema.receipts, sql`${schema.flags.receiptId} = ${schema.receipts.id}`)
+      .orderBy(desc(schema.flags.id));
 
     // Count by type
     const flagCounts = await db

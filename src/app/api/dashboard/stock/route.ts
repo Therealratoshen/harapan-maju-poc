@@ -19,8 +19,8 @@ export async function GET() {
       })
       .from(schema.stockLedger)
       .leftJoin(schema.skus, eq(schema.stockLedger.skuId, schema.skus.id))
-      .groupBy(schema.stockLedger.skuId)
-      .orderBy(schema.skus.normalizedName);
+      .groupBy(schema.stockLedger.skuId, schema.skus.normalizedName)
+      .orderBy(schema.stockLedger.skuId);
 
     const stock = stockData.map((row) => ({
       skuId: row.skuId,
