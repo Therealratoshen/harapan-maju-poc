@@ -11,7 +11,11 @@ import { join } from "path";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const OWNER_CHAT_ID = parseInt(process.env.OWNER_CHAT_ID ?? "0");
+const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY ?? "";
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL ?? "https://harapan-maju-poc.vercel.app";
+
+const MINIMAX_ENDPOINT = "https://api.minimaxi.chat/v1/chat/completions";
+const VL_MODEL = "MiniMax-VL-01";
 
 // ─── Telegram API helpers ─────────────────────────────────────────────────
 
@@ -59,10 +63,82 @@ function rpFull(n: number) {
 
 // ─── Photo: download + save ──────────────────────────────────────────────
 
-async function onPhoto(chatId: number, fileId: string, receiptType: "buyer" | "supplier" = "buyer") {
-  // Download image from Telegram
-  const imageUrl = await downloadTelegramFile(fileId);
+// ─── MiniMax OCR ─────────────────────────────────────────────────────────────
 
+const OCR_SYSTEM_PROMPT = `You are an OCR engine for Indonesian motorbike spare parts shop receipts.
+Extract all data exactly as written. Return ONLY valid JSON.
+
+Indonesian receipt format:
+- "DUS" = carton, "BH"/"PCS" = pieces, "SET" = set, "LITER" = liter
+- Numbers use dots for thousands: 1.234.567
+- Dates: DD-MM-YYYY or DD/MM/YYYY
+- DPP = tax base, PPN = VAT (11% or 12%)
+- Suppliers = places Harapan Maju BUYS from: PT Capella Patria, Indako, Central Motor, Panca Jaya, MM
+- Customers = places Harapan Maju SELLS to: Honda Jaya, Kharisma Jaya, Hasan Jaya, Asoka Jaya, Anugrah
+
+Receipt type rule:
+- If merchant is a known supplier (Capella, Indako, Central Motor, Panca Jaya, MM) → receipt_type = "buyer"
+- If customer name is visible (e.g. "Kepada: Honda Jaya") → receipt_type = "supplier"
+- Default to "buyer" if unclear
+
+Return ONLY this JSON, no explanation:
+{
+  "merchant_name": "",
+  "receipt_type": "buyer|supplier",
+  "date": "YYYY-MM-DD",
+  "invoice_number": null,
+  "customer_name": "",
+  "currency": "IDR",
+  "declared_total": 0,
+  "line_items": [{"description":"","part_number":null,"quantity":1,"unit":"pcs","unit_price":0,"total_price":0}],
+  "confidence": 0.0,
+  "notes": ""
+}`;
+
+function rp(n: number) {
+  return `Rp ${n.toLocaleString("id-ID")}`;
+}
+
+async function runReceiptOCR(imageUrl: string): Promise<any> {
+  if (!MINIMAX_API_KEY) throw new Error("MINIMAX_API_KEY not configured");
+
+  const res = await fetch(MINIMAX_ENDPOINT, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${MINIMAX_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: VL_MODEL,
+      messages: [
+        { role: "system", content: OCR_SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: imageUrl } },
+            { type: "text", text: "Extract all data from this receipt. Return ONLY JSON." },
+          ],
+        },
+      ],
+      temperature: 0.1,
+    }),
+  });
+
+  if (!res.ok) throw new Error(`MiniMax API error ${res.status}`);
+  const data = await res.json();
+  let content = (data.choices?.[0]?.message?.content ?? "").trim();
+  content = content.replace(/^```json?\n?/, "").replace(/\n?```$/, "").trim();
+  return JSON.parse(content);
+}
+
+// ─── Photo handler ─────────────────────────────────────────────────────────
+
+async function onPhoto(chatId: number, fileId: string, receiptType: "buyer" | "supplier" = "buyer") {
+  // 1. Download image from Telegram
+  const imageUrl = await downloadTelegramFile(fileId);
+  if (!imageUrl) {
+    await send(chatId, "❌ Gagal download foto. Coba lagi.");
+    return;
+  }
+
+  // 2. Create pending receipt
   const [receipt] = await db.insert(schema.receipts).values({
     receiptType,
     merchantName: "—",
@@ -71,19 +147,123 @@ async function onPhoto(chatId: number, fileId: string, receiptType: "buyer" | "s
     computedTotal: 0,
     currency: "IDR",
     status: "pending",
-    imageUrl: imageUrl ?? "",
+    imageUrl,
   }).returning();
 
   await send(chatId,
     `📸 <b>Receipt #${receipt.id} disimpan</b>\n\n` +
-    `Tunggu sebentar — OCR sedang proses.`
+    `⏳ OCR sedang proses...`
   );
 
-  if (OWNER_CHAT_ID && OWNER_CHAT_ID !== chatId) {
-    await send(OWNER_CHAT_ID,
-      `🆕 <b>Receipt baru #${receipt.id}</b>\n\n` +
-      `${receiptType === "buyer" ? "📥 Pembelian" : "📤 Penjualan"}\n` +
-      `Review: ${BASE_URL}/dashboard/receipts`
+  try {
+    // 3. Run MiniMax OCR
+    const extracted = await runReceiptOCR(imageUrl);
+    const declaredTotal = parseInt(String(extracted.declared_total)) || 0;
+    const computedTotal = (extracted.line_items ?? []).reduce(
+      (sum: number, item: any) => sum + (parseInt(String(item.total_price)) || 0),
+      0
+    );
+    const confidence = extracted.confidence ?? 0.5;
+    const merchant = extracted.merchant_name ?? "—";
+    const newType = extracted.receipt_type === "supplier" ? "supplier" : receiptType;
+
+    // 4. Update receipt with extracted data
+    await db.update(schema.receipts)
+      .set({
+        merchantName: merchant,
+        receiptType: newType as any,
+        receiptDate: extracted.date ? new Date(extracted.date) : new Date(),
+        invoiceNumber: extracted.invoice_number ?? null,
+        customerName: extracted.customer_name ?? null,
+        declaredTotal,
+        computedTotal,
+        currency: extracted.currency ?? "IDR",
+        confidence,
+        status: "flagged" as any, // start flagged for review
+        notes: extracted.notes ?? null,
+      })
+      .where(eq(schema.receipts.id, receipt.id));
+
+    // 5. Insert line items
+    const lineItemIds: number[] = [];
+    if (extracted.line_items?.length > 0) {
+      for (const item of extracted.line_items) {
+        const qty = parseFloat(String(item.quantity)) || 1;
+        const unitPrice = parseInt(String(item.unit_price)) || 0;
+        const total = parseInt(String(item.total_price)) || 0;
+        const [li] = await db.insert(schema.lineItems).values({
+          receiptId: receipt.id,
+          skuId: null,
+          rawDescription: item.description ?? "Unknown",
+          normalizedDescription: item.description ?? "Unknown",
+          partNumber: item.part_number ?? null,
+          quantity: qty,
+          unit: item.unit ?? "pcs",
+          unitPrice,
+          totalPrice: total,
+          matchStatus: "unmatched",
+          confidence,
+        }).returning();
+        if (li) lineItemIds.push(li.id);
+      }
+    }
+
+    // 6. Create flags for issues
+    const newFlags: any[] = [];
+    if (declaredTotal > 0 && computedTotal > 0) {
+      const diff = Math.abs(declaredTotal - computedTotal);
+      if (diff / Math.max(declaredTotal, 1) > 0.005) { // >0.5% variance
+        newFlags.push({
+          receiptId: receipt.id,
+          flagType: "MATH_ERROR",
+          message: `Computed (${rp(computedTotal)}) ≠ declared (${rp(declaredTotal)}). Variance: ${rp(diff)}.`,
+        });
+      }
+    }
+    if ((confidence ?? 0) < 0.5) {
+      newFlags.push({
+        receiptId: receipt.id,
+        flagType: "LOW_CONFIDENCE",
+        message: `OCR confidence ${Math.round(confidence * 100)}% — manual verification recommended.`,
+      });
+    }
+    if (newFlags.length > 0) {
+      await db.insert(schema.flags).values(newFlags);
+    } else {
+      // No issues — auto-approve
+      await db.update(schema.receipts).set({ status: "approved" as any }).where(eq(schema.receipts.id, receipt.id));
+    }
+
+    // 7. Notify owner
+    const emoji = newFlags.length > 0 ? "🚩" : "✅";
+    const flagLabel = newFlags.length > 0 ? `${newFlags.length} flag` : "Clean";
+    await send(chatId,
+      `${emoji} <b>OCR Selesai — Receipt #${receipt.id}</b>\n\n` +
+      `<b>Merchant:</b> ${merchant}\n` +
+      `<b>Total:</b> ${rp(declaredTotal)}\n` +
+      `<b>Items:</b> ${extracted.line_items?.length ?? 0}\n` +
+      `<b>Confidence:</b> ${Math.round(confidence * 100)}%\n` +
+      `<b>Status:</b> ${flagLabel}\n\n` +
+      `🔗 ${BASE_URL}/dashboard/receipts`
+    );
+
+    if (OWNER_CHAT_ID && OWNER_CHAT_ID !== chatId) {
+      await send(OWNER_CHAT_ID,
+        `🆕 <b>Receipt baru #${receipt.id}</b>\n\n` +
+        `Merchant: ${merchant}\n` +
+        `Total: ${rp(declaredTotal)}\n` +
+        `Items: ${extracted.line_items?.length ?? 0}\n` +
+        `Status: ${flagLabel}\n\n` +
+        `🔗 ${BASE_URL}/dashboard/receipts`
+      );
+    }
+  } catch (err: any) {
+    console.error("[onPhoto OCR]", err);
+    await send(chatId,
+      `⚠️ <b>OCR Gagal — Receipt #${receipt.id}</b>\n\n` +
+      `Error: ${err.message ?? "Unknown error"}\n\n` +
+      `Receipt disimpan sebagai pending.\n` +
+      `🔗 ${BASE_URL}/dashboard/receipts`
     );
   }
 }
