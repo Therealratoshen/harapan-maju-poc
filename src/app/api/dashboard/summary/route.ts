@@ -1,6 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { eq, and, gte, lte, sql, desc } from "drizzle-orm";
+import postgres from "postgres";
+
+// Direct pg connection for raw SQL (avoids drizzle type issues)
+function pg() {
+  const connStr = process.env.POSTGRES_URL ?? process.env.DATABASE_URL ?? "";
+  if (!connStr) throw new Error("POSTGRES_URL not set");
+  return postgres(connStr, { max: 1, ssl: { rejectUnauthorized: false } });
+}
+
+function rows<T>(result: any): T[] {
+  return Array.isArray(result) ? result : (result?.rows ?? []);
+}
 
 // GET /api/dashboard/summary
 export async function GET(request: NextRequest) {
@@ -45,7 +57,7 @@ export async function GET(request: NextRequest) {
       .from(schema.receipts)
       .where(and(...allIdrConditions, eq(schema.receipts.status, "pending")));
 
-    const [flagCountResult] = await db.execute(sql`SELECT COUNT(*)::int AS count FROM flags WHERE resolved = 0`);
+    const flagCountResult = (await pg().unsafe(`SELECT COUNT(*)::int AS count FROM flags WHERE resolved = 0`)) as any[];
 
     // ── Monthly grouping ────────────────────────────────
     const allApproved = await db
@@ -93,15 +105,8 @@ export async function GET(request: NextRequest) {
       .limit(10);
 
     // ── Flag summary ───────────────────────────────────
-    const flagSummaryRows = await db.execute(sql`
-      SELECT flag_type, COUNT(*)::int AS count
-      FROM flags WHERE resolved = 0
-      GROUP BY flag_type
-    `);
-    const flagSummary = (Array.isArray(flagSummaryRows) ? flagSummaryRows : (flagSummaryRows as any).rows ?? []).map((r: any) => ({
-      flagType: r.flag_type,
-      count: Number(r.count ?? 0),
-    }));
+    const flagSummaryRows = rows<{ flag_type: string; count: number }>(await pg().unsafe(`SELECT flag_type, COUNT(*)::int AS count FROM flags WHERE resolved = 0 GROUP BY flag_type`));
+    const flagSummary = flagSummaryRows.map(r => ({ flagType: r.flag_type, count: Number(r.count ?? 0) }));
 
     // ── Computed ────────────────────────────────────────
     const revenue    = Number(revenueResult?.total ?? 0);
@@ -125,7 +130,7 @@ export async function GET(request: NextRequest) {
         grossMargin: Math.round(grossMargin * 10) / 10,
         buyerReceipts:    buyerCount,
         supplierReceipts: supplierCount,
-        pendingFlags:     Number(flagCountResult?.count ?? 0),
+        pendingFlags:     Number(flagCountResult[0]?.count ?? 0),
         totalReceipts:    buyerCount + supplierCount,
         pendingReceipts:  pendingCount,
       },
