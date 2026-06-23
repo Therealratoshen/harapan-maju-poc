@@ -119,6 +119,15 @@ export async function POST() {
       CREATE INDEX IF NOT EXISTS idx_flags_receipt ON flags(receipt_id);
       CREATE INDEX IF NOT EXISTS idx_flags_resolved ON flags(resolved);
       CREATE INDEX IF NOT EXISTS idx_stock_ledger_sku ON stock_ledger(sku_id);
+
+      CREATE TABLE IF NOT EXISTS activity_logs (
+        id SERIAL PRIMARY KEY,
+        receipt_id INTEGER,
+        action TEXT NOT NULL,
+        message TEXT,
+        actor TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
     `);
 
     await pg.end();

@@ -109,6 +109,15 @@ export const stockLedger = pgTable("stock_ledger", {
   createdAt:      timestamp("created_at").defaultNow(),
 });
 
+export const activityLogs = pgTable("activity_logs", {
+  id:         serial("id").primaryKey(),
+  receiptId:  integer("receipt_id"),
+  action:     text("action").notNull(), // photo_uploaded | ocr_completed | approved | rejected | flag_raised | stock_updated
+  message:    text("message"),
+  actor:      text("actor"),            // telegram | dashboard | system
+  createdAt:  timestamp("created_at").defaultNow(),
+});
+
 // ─── DB Client ─────────────────────────────────────────────────────────────
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -151,6 +160,7 @@ export const schema = {
   skus,
   suppliers,
   customers,
+  activityLogs,
 };
 
 // ─── Types ─────────────────────────────────────────────────────────────────

@@ -1,85 +1,79 @@
 /**
  * CV. Harapan Maju — Telegram Bot Webhook
- * Receives photos + text commands, saves receipts to DB.
+ *
+ * Features:
+ * - Auth via AUTHORIZED_GROUP_ID (optional — bot works in any chat if not set)
+ * - Photo → Vercel Blob storage → MiniMax OCR → auto-creates line items
+ * - Text commands: /approve, /reject, /flag, receipt, pending, flags, omset, cogs, margin, stok
+ * - /set buyer | /set supplier — toggle receipt type
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { eq, desc, asc, and, sql } from "drizzle-orm";
-import { writeFile, mkdir } from "fs/promises";
-import { join } from "path";
+import { put } from "@vercel/blob";
 
-const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
-const OWNER_CHAT_ID = parseInt(process.env.OWNER_CHAT_ID ?? "0");
-const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY ?? "";
-const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL ?? "https://harapan-maju-poc.vercel.app";
+const BOT_TOKEN            = process.env.TELEGRAM_BOT_TOKEN     ?? "";
+const OWNER_CHAT_ID        = parseInt(process.env.OWNER_CHAT_ID ?? "0");
+const MINIMAX_API_KEY      = process.env.MINIMAX_API_KEY       ?? "";
+const BASE_URL             = process.env.NEXT_PUBLIC_BASE_URL    ?? "https://harapan-maju-poc.vercel.app";
+const AUTHORIZED_GROUP_ID  = process.env.AUTHORIZED_GROUP_ID     ?? "";
+const BLOB_READ_WRITE_TOKEN = process.env.BLOB_READ_WRITE_TOKEN  ?? "";
 
 const MINIMAX_ENDPOINT = "https://api.minimaxi.chat/v1/chat/completions";
-const VL_MODEL = "MiniMax-VL-01";
+const VL_MODEL        = "MiniMax-VL-01";
 
-// ─── Telegram API helpers ─────────────────────────────────────────────────
+// ─── Telegram API ────────────────────────────────────────────────────────────
 
 async function send(chatId: number, text: string) {
   if (!BOT_TOKEN || !chatId) return;
   await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-    method: "POST",
+    method:  "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
-  });
+    body:    JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
+  }).catch(() => {});
 }
 
-async function downloadTelegramFile(fileId: string): Promise<string | null> {
-  if (!BOT_TOKEN) return null;
-  try {
-    // Get file path from Telegram
-    const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${fileId}`);
-    const data = await res.json();
-    if (!data.ok || !data.result?.file_path) return null;
+function rp(n: number) { return `Rp ${n.toLocaleString("id-ID")}`; }
 
-    const { file_path } = data.result;
-    // Download the file
-    const imgRes = await fetch(`https://api.telegram.org/file/bot${BOT_TOKEN}/${file_path}`);
-    if (!imgRes.ok) return null;
+// ─── Auth ─────────────────────────────────────────────────────────────────
 
-    const bytes = await imgRes.arrayBuffer();
-    const buffer = Buffer.from(bytes);
-
-    // Save to /public/uploads
-    const ext = file_path.split(".").pop() ?? "jpg";
-    const filename = `telegram_${Date.now()}.${ext}`;
-    const uploadDir = join(process.cwd(), "public", "uploads");
-    await mkdir(uploadDir, { recursive: true });
-    await writeFile(join(uploadDir, filename), buffer);
-
-    return `/uploads/${filename}`;
-  } catch {
-    return null;
-  }
+async function isAuthorized(chatId: number): Promise<boolean> {
+  if (!AUTHORIZED_GROUP_ID) return true; // No restriction
+  const chatIdStr = String(chatId);
+  // Allow: owner chat ID, authorized group, or if GROUP_ID is set as numeric group ID
+  return (
+    chatIdStr === AUTHORIZED_GROUP_ID ||
+    chatId === OWNER_CHAT_ID
+  );
 }
 
-function rpFull(n: number) {
-  return `Rp ${n.toLocaleString("id-ID")}`;
+// ─── Receipt type memory per user ──────────────────────────────────────────
+// Simple in-memory store — resets on cold start (acceptable for POC)
+const userPrefs = new Map<number, "buyer" | "supplier">();
+
+function getPref(chatId: number): "buyer" | "supplier" {
+  return userPrefs.get(chatId) ?? "buyer";
 }
 
-// ─── Photo: download + save ──────────────────────────────────────────────
+function setPref(chatId: number, type: "buyer" | "supplier") {
+  userPrefs.set(chatId, type);
+}
 
-// ─── MiniMax OCR ─────────────────────────────────────────────────────────────
+// ─── MiniMax OCR ───────────────────────────────────────────────────────────
 
-const OCR_SYSTEM_PROMPT = `You are an OCR engine for Indonesian motorbike spare parts shop receipts.
+const OCR_PROMPT = `You are an OCR engine for Indonesian motorbike spare parts shop receipts.
 Extract all data exactly as written. Return ONLY valid JSON.
 
-Indonesian receipt format:
-- "DUS" = carton, "BH"/"PCS" = pieces, "SET" = set, "LITER" = liter
-- Numbers use dots for thousands: 1.234.567
+Indonesian format:
+- "DUS"=carton, "BH"/"PCS"=pieces, "SET"=set, "LITER"/"LTR"=liter
+- Numbers use dots: 1.234.567
 - Dates: DD-MM-YYYY or DD/MM/YYYY
-- DPP = tax base, PPN = VAT (11% or 12%)
-- Suppliers = places Harapan Maju BUYS from: PT Capella Patria, Indako, Central Motor, Panca Jaya, MM
-- Customers = places Harapan Maju SELLS to: Honda Jaya, Kharisma Jaya, Hasan Jaya, Asoka Jaya, Anugrah
-
-Receipt type rule:
-- If merchant is a known supplier (Capella, Indako, Central Motor, Panca Jaya, MM) → receipt_type = "buyer"
-- If customer name is visible (e.g. "Kepada: Honda Jaya") → receipt_type = "supplier"
-- Default to "buyer" if unclear
+- DPP = tax base, PPN = VAT 11%/12%
+- Suppliers (Harapan Maju BUYS from): PT Capella Patria, Indako, Central Motor, Panca Jaya, MM, Honda Jaya
+- Customers (Harapan Maju SELLS to): Honda Jaya, Kharisma Jaya, Hasan Jaya, Asoka Jaya, Anugrah, Anjas, Amar
+- "KEPADA" or "Kepada" = addressed to customer → supplier receipt
+- Supplier name in header → buyer receipt
 
 Return ONLY this JSON, no explanation:
 {
@@ -95,25 +89,21 @@ Return ONLY this JSON, no explanation:
   "notes": ""
 }`;
 
-function rp(n: number) {
-  return `Rp ${n.toLocaleString("id-ID")}`;
-}
-
-async function runReceiptOCR(imageUrl: string): Promise<any> {
+async function runOCR(imageUrl: string): Promise<any> {
   if (!MINIMAX_API_KEY) throw new Error("MINIMAX_API_KEY not configured");
 
   const res = await fetch(MINIMAX_ENDPOINT, {
-    method: "POST",
+    method:  "POST",
     headers: { "Authorization": `Bearer ${MINIMAX_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: VL_MODEL,
       messages: [
-        { role: "system", content: OCR_SYSTEM_PROMPT },
+        { role: "system", content: OCR_PROMPT },
         {
           role: "user",
           content: [
             { type: "image_url", image_url: { url: imageUrl } },
-            { type: "text", text: "Extract all data from this receipt. Return ONLY JSON." },
+            { type: "text", text: "Extract all data. Return ONLY JSON." },
           ],
         },
       ],
@@ -122,23 +112,71 @@ async function runReceiptOCR(imageUrl: string): Promise<any> {
   });
 
   if (!res.ok) throw new Error(`MiniMax API error ${res.status}`);
-  const data = await res.json();
-  let content = (data.choices?.[0]?.message?.content ?? "").trim();
+  const data    = await res.json();
+  let content  = (data.choices?.[0]?.message?.content ?? "").trim();
   content = content.replace(/^```json?\n?/, "").replace(/\n?```$/, "").trim();
   return JSON.parse(content);
 }
 
-// ─── Photo handler ─────────────────────────────────────────────────────────
+// ─── Photo upload to Vercel Blob ──────────────────────────────────────────
 
-async function onPhoto(chatId: number, fileId: string, receiptType: "buyer" | "supplier" = "buyer") {
-  // 1. Download image from Telegram
-  const imageUrl = await downloadTelegramFile(fileId);
+async function uploadToBlob(fileId: string): Promise<string | null> {
+  if (!BOT_TOKEN) return null;
+  try {
+    // Get file path from Telegram
+    const fileRes = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getFile?file_id=${fileId}`);
+    const fileData = await fileRes.json();
+    if (!fileData.ok || !fileData.result?.file_path) return null;
+
+    const { file_path } = fileData.result;
+    const ext = file_path.split(".").pop()?.toLowerCase() ?? "jpg";
+    const filename = `receipts/${Date.now()}_${fileId.slice(-8)}.${ext}`;
+
+    // Download image bytes from Telegram
+    const imgRes = await fetch(`https://api.telegram.org/file/bot${BOT_TOKEN}/${file_path}`);
+    if (!imgRes.ok) return null;
+    const bytes = await imgRes.arrayBuffer();
+
+    // Upload to Vercel Blob
+    if (!BLOB_READ_WRITE_TOKEN) {
+      // Fallback: return the Telegram URL directly
+      return `https://api.telegram.org/file/bot${BOT_TOKEN}/${file_path}`;
+    }
+
+    const blob = await put(filename, bytes, {
+      access: "public",
+      contentType: ext === "png" ? "image/png" : "image/jpeg",
+    });
+
+    return blob.url;
+  } catch (err) {
+    console.error("[blob upload]", err);
+    return null;
+  }
+}
+
+// ─── Log activity ─────────────────────────────────────────────────────────
+
+async function logActivity(receiptId: number, action: string, message: string, actor = "telegram") {
+  try {
+    await db.insert(schema.activityLogs).values({ receiptId, action, message, actor });
+  } catch { /* non-critical */ }
+}
+
+// ─── onPhoto ───────────────────────────────────────────────────────────────
+
+async function onPhoto(chatId: number, fileId: string) {
+  // 1. Upload to Vercel Blob (persistent)
+  await send(chatId, "📸 Foto diterima. Mengunggah...");
+
+  const imageUrl = await uploadToBlob(fileId);
   if (!imageUrl) {
-    await send(chatId, "❌ Gagal download foto. Coba lagi.");
+    await send(chatId, "❌ Gagal upload foto. Coba lagi.");
     return;
   }
 
   // 2. Create pending receipt
+  const receiptType = getPref(chatId);
   const [receipt] = await db.insert(schema.receipts).values({
     receiptType,
     merchantName: "—",
@@ -150,243 +188,320 @@ async function onPhoto(chatId: number, fileId: string, receiptType: "buyer" | "s
     imageUrl,
   }).returning();
 
-  await send(chatId,
-    `📸 <b>Receipt #${receipt.id} disimpan</b>\n\n` +
-    `⏳ OCR sedang proses...`
-  );
+  await logActivity(receipt.id, "photo_uploaded", `Photo uploaded via Telegram — type: ${receiptType}`, "telegram");
+  await send(chatId, `⏳ Receipt #${receipt.id} disimpan. OCR berjalan...`);
 
   try {
-    // 3. Run MiniMax OCR
-    const extracted = await runReceiptOCR(imageUrl);
+    // 3. Run OCR
+    const extracted  = await runOCR(imageUrl);
     const declaredTotal = parseInt(String(extracted.declared_total)) || 0;
     const computedTotal = (extracted.line_items ?? []).reduce(
-      (sum: number, item: any) => sum + (parseInt(String(item.total_price)) || 0),
-      0
+      (sum: number, item: any) => sum + (parseInt(String(item.total_price)) || 0), 0
     );
     const confidence = extracted.confidence ?? 0.5;
-    const merchant = extracted.merchant_name ?? "—";
-    const newType = extracted.receipt_type === "supplier" ? "supplier" : receiptType;
+    const merchant  = extracted.merchant_name ?? "—";
 
-    // 4. Update receipt with extracted data
+    // 4. Update receipt
     await db.update(schema.receipts)
       .set({
-        merchantName: merchant,
-        receiptType: newType as any,
-        receiptDate: extracted.date ? new Date(extracted.date) : new Date(),
-        invoiceNumber: extracted.invoice_number ?? null,
-        customerName: extracted.customer_name ?? null,
+        merchantName:   merchant,
+        receiptType:   (extracted.receipt_type === "supplier" ? "supplier" : receiptType) as any,
+        receiptDate:    extracted.date ? new Date(extracted.date) : new Date(),
+        invoiceNumber:  extracted.invoice_number ?? null,
+        customerName:  extracted.customer_name ?? null,
         declaredTotal,
         computedTotal,
-        currency: extracted.currency ?? "IDR",
+        currency:       extracted.currency ?? "IDR",
         confidence,
-        status: "flagged" as any, // start flagged for review
-        notes: extracted.notes ?? null,
+        status:         "flagged" as any,
+        notes:          extracted.notes ?? null,
       })
       .where(eq(schema.receipts.id, receipt.id));
 
     // 5. Insert line items
-    const lineItemIds: number[] = [];
-    if (extracted.line_items?.length > 0) {
-      for (const item of extracted.line_items) {
-        const qty = parseFloat(String(item.quantity)) || 1;
-        const unitPrice = parseInt(String(item.unit_price)) || 0;
-        const total = parseInt(String(item.total_price)) || 0;
-        const [li] = await db.insert(schema.lineItems).values({
-          receiptId: receipt.id,
-          skuId: null,
-          rawDescription: item.description ?? "Unknown",
-          normalizedDescription: item.description ?? "Unknown",
-          partNumber: item.part_number ?? null,
-          quantity: qty,
-          unit: item.unit ?? "pcs",
-          unitPrice,
-          totalPrice: total,
-          matchStatus: "unmatched",
-          confidence,
-        }).returning();
-        if (li) lineItemIds.push(li.id);
-      }
-    }
-
-    // 6. Create flags for issues
-    const newFlags: any[] = [];
-    if (declaredTotal > 0 && computedTotal > 0) {
-      const diff = Math.abs(declaredTotal - computedTotal);
-      if (diff / Math.max(declaredTotal, 1) > 0.005) { // >0.5% variance
-        newFlags.push({
-          receiptId: receipt.id,
-          flagType: "MATH_ERROR",
-          message: `Computed (${rp(computedTotal)}) ≠ declared (${rp(declaredTotal)}). Variance: ${rp(diff)}.`,
-        });
-      }
-    }
-    if ((confidence ?? 0) < 0.5) {
-      newFlags.push({
+    for (const item of extracted.line_items ?? []) {
+      const qty       = parseFloat(String(item.quantity)) || 1;
+      const unitPrice = parseInt(String(item.unit_price))  || 0;
+      const total     = parseInt(String(item.total_price))  || 0;
+      await db.insert(schema.lineItems).values({
         receiptId: receipt.id,
-        flagType: "LOW_CONFIDENCE",
-        message: `OCR confidence ${Math.round(confidence * 100)}% — manual verification recommended.`,
+        skuId:     null,
+        rawDescription:          item.description ?? "Unknown",
+        normalizedDescription:   item.description ?? "Unknown",
+        partNumber:             item.part_number ?? null,
+        quantity:               qty,
+        unit:                   item.unit ?? "pcs",
+        unitPrice,
+        totalPrice:             total,
+        matchStatus:            "unmatched",
+        confidence,
       });
     }
-    if (newFlags.length > 0) {
-      await db.insert(schema.flags).values(newFlags);
+
+    // 6. Create flags
+    const flags: any[] = [];
+    if (declaredTotal > 0 && computedTotal > 0) {
+      const diff = Math.abs(declaredTotal - computedTotal);
+      if (diff / Math.max(declaredTotal, 1) > 0.005) {
+        flags.push({ flagType: "MATH_ERROR", message: `Computed (${rp(computedTotal)}) ≠ declared (${rp(declaredTotal)}). Diff: ${rp(diff)}.` });
+      }
+    }
+    if (!extracted.invoice_number && receiptType === "buyer") {
+      flags.push({ flagType: "MISSING_INVOICE_NO", message: "No invoice number detected." });
+    }
+    if ((confidence ?? 0) < 0.5) {
+      flags.push({ flagType: "LOW_CONFIDENCE", message: `OCR confidence ${Math.round(confidence * 100)}% — manual verification needed.` });
+    }
+
+    if (flags.length > 0) {
+      await db.insert(schema.flags).values(flags.map(f => ({ receiptId: receipt.id, ...f })));
     } else {
-      // No issues — auto-approve
+      // Clean receipt — auto-approve
       await db.update(schema.receipts).set({ status: "approved" as any }).where(eq(schema.receipts.id, receipt.id));
     }
 
-    // 7. Notify owner
-    const emoji = newFlags.length > 0 ? "🚩" : "✅";
-    const flagLabel = newFlags.length > 0 ? `${newFlags.length} flag` : "Clean";
+    await logActivity(receipt.id, "ocr_completed", `OCR done — ${extracted.line_items?.length ?? 0} items, ${flags.length} flags`, "system");
+
+    const emoji = flags.length > 0 ? "🚩" : "✅";
+    const status = flags.length > 0 ? `${flags.length} flag` : "Clean";
     await send(chatId,
-      `${emoji} <b>OCR Selesai — Receipt #${receipt.id}</b>\n\n` +
+      `${emoji} <b>OCR Selesai — #${receipt.id}</b>\n\n` +
       `<b>Merchant:</b> ${merchant}\n` +
       `<b>Total:</b> ${rp(declaredTotal)}\n` +
       `<b>Items:</b> ${extracted.line_items?.length ?? 0}\n` +
       `<b>Confidence:</b> ${Math.round(confidence * 100)}%\n` +
-      `<b>Status:</b> ${flagLabel}\n\n` +
+      `<b>Status:</b> ${status}\n\n` +
       `🔗 ${BASE_URL}/dashboard/receipts`
     );
 
     if (OWNER_CHAT_ID && OWNER_CHAT_ID !== chatId) {
       await send(OWNER_CHAT_ID,
-        `🆕 <b>Receipt baru #${receipt.id}</b>\n\n` +
-        `Merchant: ${merchant}\n` +
-        `Total: ${rp(declaredTotal)}\n` +
-        `Items: ${extracted.line_items?.length ?? 0}\n` +
-        `Status: ${flagLabel}\n\n` +
+        `📸 <b>Receipt baru #${receipt.id}</b>\n` +
+        `Merchant: ${merchant} | Items: ${extracted.line_items?.length ?? 0} | Status: ${status}\n` +
         `🔗 ${BASE_URL}/dashboard/receipts`
       );
     }
   } catch (err: any) {
     console.error("[onPhoto OCR]", err);
     await send(chatId,
-      `⚠️ <b>OCR Gagal — Receipt #${receipt.id}</b>\n\n` +
-      `Error: ${err.message ?? "Unknown error"}\n\n` +
+      `⚠️ <b>OCR Gagal — #${receipt.id}</b>\n\n` +
+      `${err.message ?? "Unknown error"}\n\n` +
       `Receipt disimpan sebagai pending.\n` +
       `🔗 ${BASE_URL}/dashboard/receipts`
     );
   }
 }
 
-// ─── Text commands ───────────────────────────────────────────────────────
+// ─── onText ────────────────────────────────────────────────────────────────
 
 async function onText(chatId: number, text: string) {
   const t = text.trim().toLowerCase();
 
-  // /start
-  if (t === "/start" || t === "/help") {
+  // ── Pref commands ──────────────────────────────────────────────────────
+  if (t === "tipe beli" || t === "set buyer" || t === "/set_buyer" || t === "/buyer") {
+    setPref(chatId, "buyer");
+    return send(chatId, `📥 Mode: Pembelian (buyer)\n\nKirim foto receipt → tercatat sebagai pembelian.`);
+  }
+  if (t === "tipe jual" || t === "set supplier" || t === "/set_supplier" || t === "/supplier") {
+    setPref(chatId, "supplier");
+    return send(chatId, `📤 Mode: Penjualan (supplier)\n\nKirim foto receipt → tercatat sebagai penjualan.`);
+  }
+
+  // ── /approve #id ────────────────────────────────────────────────────────
+  const approveMatch = text.match(/^\/approve\s*#?(\d+)/i);
+  if (approveMatch) {
+    const id = parseInt(approveMatch[1]);
+    const [receipt] = await db.select().from(schema.receipts).where(eq(schema.receipts.id, id)).limit(1);
+    if (!receipt) return send(chatId, `❌ Receipt #${id} tidak ditemukan.`);
+    if (receipt.status === "approved") return send(chatId, `ℹ️ Receipt #${id} sudah di-approve.`);
+    if (receipt.status === "rejected") return send(chatId, `❌ Receipt #${id} sudah di-reject.`);
+
+    await db.update(schema.receipts).set({ status: "approved" as any }).where(eq(schema.receipts.id, id));
+    await logActivity(id, "approved", "Approved via Telegram", "telegram");
+    return send(chatId, `✅ <b>Receipt #${id} approved</b>\n\nMerchant: ${receipt.merchantName ?? "—"}\nTotal: ${rp(receipt.declaredTotal ?? 0)}\n\n🔗 ${BASE_URL}/dashboard/receipts`);
+  }
+
+  // ── /reject #id [reason] ─────────────────────────────────────────────
+  const rejectMatch = text.match(/^\/reject\s*#?(\d+)\s*(.*)/i);
+  if (rejectMatch) {
+    const id    = parseInt(rejectMatch[1]);
+    const notes = rejectMatch[2].trim();
+    const [receipt] = await db.select().from(schema.receipts).where(eq(schema.receipts.id, id)).limit(1);
+    if (!receipt) return send(chatId, `❌ Receipt #${id} tidak ditemukan.`);
+    if (receipt.status === "approved") return send(chatId, `❌ Receipt #${id} sudah di-approve.`);
+
+    await db.update(schema.receipts).set({
+      status: "rejected" as any,
+      notes:  notes || receipt.notes,
+    }).where(eq(schema.receipts.id, id));
+    await logActivity(id, "rejected", notes ? `Rejected: ${notes}` : "Rejected via Telegram", "telegram");
+    return send(chatId, `❌ <b>Receipt #${id} rejected</b>\n${notes ? `Alasan: ${notes}` : ""}\n\n🔗 ${BASE_URL}/dashboard/receipts`);
+  }
+
+  // ── /flag #id TYPE [message] ────────────────────────────────────────────
+  const flagMatch = text.match(/^\/flag\s*#?(\d+)\s+(\w+)\s*(.*)/i);
+  if (flagMatch) {
+    const id     = parseInt(flagMatch[1]);
+    const ftype  = flagMatch[2].toUpperCase();
+    const fmsg   = flagMatch[3].trim();
+    const validTypes = ["MATH_ERROR", "MISSING_DATE", "MISSING_INVOICE_NO", "NEGATIVE_STOCK",
+      "UNRECONCILED", "DUPLICATE", "FOREIGN_CURRENCY", "DEAD_STOCK", "LOW_CONFIDENCE"];
+    if (!validTypes.includes(ftype)) {
+      return send(chatId, `❌ Tipe flag tidak valid.\nTipe yang tersedia: ${validTypes.join(", ")}`);
+    }
+    const [receipt] = await db.select().from(schema.receipts).where(eq(schema.receipts.id, id)).limit(1);
+    if (!receipt) return send(chatId, `❌ Receipt #${id} tidak ditemukan.`);
+
+    await db.insert(schema.flags).values({ receiptId: id, flagType: ftype as any, message: fmsg });
+    await logActivity(id, "flag_raised", `${ftype}: ${fmsg}`, "telegram");
+    return send(chatId, `🚩 <b>Receipt #${id} di-flag</b>\n\nTipe: ${ftype}\n${fmsg}`);
+  }
+
+  // ── /help or /start ───────────────────────────────────────────────────
+  if (t === "/start" || t === "/help" || t === "help") {
     return send(chatId,
-      `<b>CV. Harapan Maju Tracker</b>\n\n` +
-      `📸 Kirim foto receipt → otomatis tersimpan.\n\n` +
-      `Atau ketik:\n` +
+      `<b>CV. Harapan Maju Bot</b>\n\n` +
+      `📸 Kirim foto receipt → OCR otomatis\n\n` +
+      `Perintah:\n` +
+      `• /approve #id — approve receipt\n` +
+      `• /reject #id [reason] — reject\n` +
+      `• /flag #id TYPE [msg] — flag receipt\n` +
       `• receipt — daftar terbaru\n` +
       `• pending — belum di-review\n` +
       `• flags — masalah\n` +
       `• omset — penjualan\n` +
       `• cogs — pembelian\n` +
       `• margin — laba\n` +
-      `• stok — inventory`
+      `• stok — inventory\n` +
+      `• /set_buyer | /set_supplier — mode receipt`
     );
   }
 
-  // ── receipt type toggle
-  if (t === "tipe beli" || t === "set buyer" || t === "/buyer") {
-    // Set preference for this chat — simplified: just acknowledge
-    return send(chatId, `📥 Mode: Pembelian (buyer)\n\nKirim foto receipt → akan tercatat sebagai pembelian.`);
-  }
-  if (t === "tipe jual" || t === "set supplier" || t === "/supplier") {
-    return send(chatId, `📤 Mode: Penjualan (supplier)\n\nKirim foto receipt → akan tercatat sebagai penjualan.`);
-  }
-
-  // ── receipt list
+  // ── receipt list ───────────────────────────────────────────────────────
   if (t.includes("receipt") || t.includes("struk") || t === "daftar") {
-    const rows = await db.select().from(schema.receipts).orderBy(desc(schema.receipts.receiptDate)).limit(10);
-    if (rows.length === 0) return send(chatId, "📭 Belum ada receipt.");
-    const lines = rows.map((r: any) => {
-      const date = new Date(r.receiptDate).toLocaleDateString("id-ID", { day: "2-digit", month: "short" });
+    const receipts = await db.select().from(schema.receipts)
+      .orderBy(desc(schema.receipts.receiptDate)).limit(8);
+    if (receipts.length === 0) return send(chatId, "📭 Belum ada receipt.");
+    const lines = receipts.map(r => {
+      const date   = new Date(r.receiptDate).toLocaleDateString("id-ID", { day: "2-digit", month: "short" });
       const status = r.status === "approved" ? "✅" : r.status === "flagged" ? "🚩" : "⏳";
-      const type = r.receiptType === "supplier" ? "📤" : "📥";
-      const total = r.declaredTotal ? rpFull(r.declaredTotal) : "—";
+      const type   = r.receiptType === "supplier" ? "📤" : "📥";
+      const total  = r.declaredTotal ? rp(r.declaredTotal) : "—";
       return `${status} #${r.id} ${type} ${date} | ${r.merchantName || "—"} | ${total}`;
     }).join("\n");
     return send(chatId, `<b>Receipt Terbaru</b>\n\n${lines}`);
   }
 
-  // ── pending
+  // ── pending ───────────────────────────────────────────────────────────
   if (t.includes("pending") || t.includes("menunggu")) {
-    const rows = await db.select().from(schema.receipts).where(eq(schema.receipts.status, "pending")).orderBy(asc(schema.receipts.receiptDate));
-    if (rows.length === 0) return send(chatId, "✅ Semua receipt sudah di-review.");
-    const lines = rows.map((r: any) => `⏳ #${r.id} | ${r.merchantName || "—"} | ${new Date(r.receiptDate).toLocaleDateString("id-ID", { day: "2-digit", month: "short" })}`).join("\n");
-    return send(chatId, `<b>${rows.length} Receipt Pending</b>\n\n${lines}\n\nReview: ${BASE_URL}/dashboard/receipts`);
+    const receipts = await db.select().from(schema.receipts)
+      .where(eq(schema.receipts.status, "pending"))
+      .orderBy(asc(schema.receipts.receiptDate));
+    if (receipts.length === 0) return send(chatId, "✅ Semua receipt sudah di-review.");
+    const lines = receipts.map(r =>
+      `⏳ #${r.id} | ${r.merchantName || "—"} | ${new Date(r.receiptDate).toLocaleDateString("id-ID", { day: "2-digit", month: "short" })}`
+    ).join("\n");
+    return send(chatId, `<b>${receipts.length} Receipt Pending</b>\n\n${lines}\n\n🔗 ${BASE_URL}/dashboard/receipts`);
   }
 
-  // ── flags
+  // ── flags ──────────────────────────────────────────────────────────────
   if (t.includes("flag") || t.includes("masalah")) {
-    const rows = await db.select({ count: sql<number>`count(*)`, type: schema.flags.flagType }).from(schema.flags).where(eq(schema.flags.resolved, 0)).groupBy(schema.flags.flagType);
-    if (rows.length === 0) return send(chatId, "✅ Tidak ada masalah. Semua bersih.");
-    const total = rows.reduce((s: number, f: any) => s + Number(f.count), 0);
-    const lines = rows.map((f: any) => `🚩 ${f.type?.replace(/_/g, " ")}: ${f.count}`).join("\n");
-    return send(chatId, `<b>🚩 ${total} Flags</b>\n\n${lines}\n\nReview: ${BASE_URL}/dashboard/flags`);
+    const flagRows = await db.execute(sql<{ flag_type: string; unresolved: number }>`
+      SELECT flag_type, COALESCE(SUM(CASE WHEN resolved = 0 THEN 1 ELSE 0 END), 0)::int AS unresolved
+      FROM flags GROUP BY flag_type
+    `);
+    const rows = (flagRows as any[]);
+    if (rows.length === 0) return send(chatId, "✅ Tidak ada masalah.");
+    const total = rows.reduce((s, r) => s + Number(r.unresolved ?? 0), 0);
+    const lines = rows.map(r => `🚩 ${r.flag_type?.replace(/_/g, " ")}: ${r.unresolved}`).join("\n");
+    return send(chatId, `<b>🚩 ${total} Flags</b>\n\n${lines}\n\n🔗 ${BASE_URL}/dashboard/flags`);
   }
 
-  // ── omset
+  // ── omset (revenue) ────────────────────────────────────────────────────
   if (t.includes("omset") || t.includes("revenue") || t.includes("penjualan")) {
-    const [row] = await db.select({ total: sql<number>`coalesce(sum(declared_total), 0)` }).from(schema.receipts).where(and(eq(schema.receipts.receiptType, "supplier"), eq(schema.receipts.currency, "IDR"), eq(schema.receipts.status, "approved")));
-    return send(chatId, `<b>📊 Omset</b>\n\nTotal: ${rpFull(Number(row?.total ?? 0))}`);
+    const [row] = await db.select({ total: sql<number>`COALESCE(SUM(declared_total), 0)` })
+      .from(schema.receipts)
+      .where(and(sql`receipt_type = 'supplier'`, sql`status = 'approved'`, sql`currency = 'IDR'`));
+    return send(chatId, `<b>📊 Omset</b>\n\nTotal: ${rp(Number(row?.total ?? 0))}`);
   }
 
-  // ── cogs
+  // ── cogs ───────────────────────────────────────────────────────────────
   if (t.includes("cogs") || t.includes("pembelian") || t.includes("beli")) {
-    const [row] = await db.select({ total: sql<number>`coalesce(sum(declared_total), 0)` }).from(schema.receipts).where(and(eq(schema.receipts.receiptType, "buyer"), eq(schema.receipts.currency, "IDR"), eq(schema.receipts.status, "approved")));
-    return send(chatId, `<b>💸 Total Pembelian</b>\n\nTotal: ${rpFull(Number(row?.total ?? 0))}`);
+    const [row] = await db.select({ total: sql<number>`COALESCE(SUM(declared_total), 0)` })
+      .from(schema.receipts)
+      .where(and(sql`receipt_type = 'buyer'`, sql`status = 'approved'`, sql`currency = 'IDR'`));
+    return send(chatId, `<b>💸 Total Pembelian</b>\n\nTotal: ${rp(Number(row?.total ?? 0))}`);
   }
 
-  // ── margin
+  // ── margin ─────────────────────────────────────────────────────────────
   if (t.includes("margin") || t.includes("laba") || t.includes("profit")) {
-    const [rev] = await db.select({ total: sql<number>`coalesce(sum(declared_total), 0)` }).from(schema.receipts).where(and(eq(schema.receipts.receiptType, "supplier"), eq(schema.receipts.currency, "IDR"), eq(schema.receipts.status, "approved")));
-    const [cog] = await db.select({ total: sql<number>`coalesce(sum(declared_total), 0)` }).from(schema.receipts).where(and(eq(schema.receipts.receiptType, "buyer"), eq(schema.receipts.currency, "IDR"), eq(schema.receipts.status, "approved")));
+    const [rev] = await db.select({ total: sql<number>`COALESCE(SUM(declared_total), 0)` })
+      .from(schema.receipts)
+      .where(and(sql`receipt_type = 'supplier'`, sql`status = 'approved'`, sql`currency = 'IDR'`));
+    const [cog] = await db.select({ total: sql<number>`COALESCE(SUM(declared_total), 0)` })
+      .from(schema.receipts)
+      .where(and(sql`receipt_type = 'buyer'`, sql`status = 'approved'`, sql`currency = 'IDR'`));
     const r = Number(rev?.total ?? 0), c = Number(cog?.total ?? 0);
-    const profit = r - c, pct = r > 0 ? ((profit / r) * 100).toFixed(1) : "0";
-    return send(chatId, `<b>📈 Margin</b>\n\nOmset:   ${rpFull(r)}\nBelanja:  ${rpFull(c)}\nLaba:     ${rpFull(profit)}\nMargin:   ${pct}%`);
+    const profit = r - c;
+    const pct    = r > 0 ? ((profit / r) * 100).toFixed(1) : "0";
+    return send(chatId,
+      `<b>📈 Margin</b>\n\n` +
+      `Omset:   ${rp(r)}\n` +
+      `Belanja:  ${rp(c)}\n` +
+      `Laba:     ${rp(profit)}\n` +
+      `Margin:   ${pct}%`
+    );
   }
 
-  // ── stok
+  // ── stok ───────────────────────────────────────────────────────────────
   if (t.includes("stok") || t.includes("stock") || t.includes("inventory")) {
-    const rows = await db.select({ name: schema.skus.normalizedName, balance: sql<number>`coalesce(sum(case when movement_type = 'in' then quantity else -quantity end), 0)` }).from(schema.stockLedger).leftJoin(schema.skus, eq(schema.stockLedger.skuId, schema.skus.id)).groupBy(schema.stockLedger.skuId).orderBy(sql`balance desc`).limit(8);
+    const stockData = await db.execute(sql<{ sku_name: string | null; balance: number }>`
+      SELECT COALESCE(s.normalized_name, 'Unknown') AS sku_name,
+             COALESCE(SUM(CASE WHEN sl.movement_type = 'in' THEN sl.quantity ELSE -sl.quantity END), 0) AS balance
+      FROM stock_ledger sl LEFT JOIN skus s ON sl.sku_id = s.id
+      GROUP BY sl.sku_id, s.normalized_name
+      ORDER BY balance DESC LIMIT 8
+    `);
+    const rows = stockData as any[];
     if (rows.length === 0) return send(chatId, "📦 Belum ada data stok.");
-    const lines = rows.map((s: any) => {
-      const b = Number(s.balance ?? 0);
-      return `${b > 0 ? "🟢" : b < 0 ? "🔴" : "⚪"} ${s.name || "?"}: ${b}`;
+    const lines = rows.map(r => {
+      const b = Number(r.balance ?? 0);
+      return `${b > 0 ? "🟢" : b < 0 ? "🔴" : "⚪"} ${r.sku_name ?? "?"}: ${b}`;
     }).join("\n");
     return send(chatId, `<b>📦 Stok</b>\n\n${lines}`);
   }
 
-  // ── default
+  // ── default ─────────────────────────────────────────────────────────────
   return send(chatId,
     `Tidak paham: "${text}"\n\n` +
     `Kirim foto receipt, atau ketik:\n` +
-    `receipt · pending · flags · omset · cogs · margin · stok`
+    `receipt · pending · flags · omset · cogs · margin · stok\n` +
+    `/approve #id · /reject #id · /flag #id TYPE`
   );
 }
 
-// ─── Webhook ──────────────────────────────────────────────────────────────
+// ─── Webhook ─────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
   if (!BOT_TOKEN) return NextResponse.json({ error: "BOT_TOKEN not set" }, { status: 500 });
 
   try {
-    const body = await request.json();
-    const msg = body.message ?? body.edited_message;
+    const body    = await request.json();
+    const msg     = body.message ?? body.edited_message;
     if (!msg) return NextResponse.json({ ok: true });
 
-    const chatId = msg.chat?.id;
-    const text = msg.text ?? msg.caption;
-    const photos: any[] = msg.photo ?? [];
+    const chatId  = msg.chat?.id;
+    const text    = msg.text ?? msg.caption;
+    const photos : any[] = msg.photo ?? [];
 
     if (!chatId) return NextResponse.json({ ok: true });
 
+    // Auth check
+    if (!(await isAuthorized(chatId))) {
+      return NextResponse.json({ ok: true });
+    }
+
     if (photos.length > 0) {
-      // Use largest photo
       const fileId = photos[photos.length - 1]?.file_id ?? photos[0]?.file_id ?? "";
       await onPhoto(chatId, fileId);
     } else if (text) {
@@ -395,11 +510,11 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ ok: true });
   } catch (err) {
-    console.error(err);
+    console.error("[telegram]", err);
     return NextResponse.json({ ok: false, error: String(err) }, { status: 500 });
   }
 }
 
 export async function GET() {
-  return NextResponse.json({ ok: true, name: "CV. Harapan Maju Bot" });
+  return NextResponse.json({ ok: true, name: "CV. Harapan Maju Bot", version: "2.0" });
 }
