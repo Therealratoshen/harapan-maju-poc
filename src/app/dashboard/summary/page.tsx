@@ -35,7 +35,7 @@ function formatDateLong() {
 
 function SkeletonKPI() {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 14 }}>
+    <div className="kpi-grid-6" style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)", gap: 14 }}>
       {[1,2,3,4,5].map(i => (
         <div key={i} className="card-flat" style={{ height: 96 }}>
           <div className="skeleton" style={{ height: 10, width: "60%", marginBottom: 12 }} />
@@ -72,6 +72,8 @@ export default function SummaryPage() {
     recentReceipts = [],
     flagSummary = [],
     cogsBySupplier = [],
+    topMerchants = [],
+    reconciliationAlerts = [],
     greeting = getGreeting(),
     pendingCount = 0,
   } = data ?? {};
@@ -102,14 +104,14 @@ export default function SummaryPage() {
         </Link>
       </div>
 
-      {/* ── Pending Alert ───────────────────────────── */}
+      {/* ── Pending / Needs Review Alert ─────────────── */}
       {pendingCount > 0 && (
         <div style={{
           background: "rgba(217,119,6,0.08)",
           border: "1px solid rgba(217,119,6,0.2)",
           borderRadius: 12, padding: "14px 18px",
           display: "flex", alignItems: "center", justifyContent: "space-between",
-          gap: 12, marginBottom: 20, flexWrap: "wrap"
+          gap: 12, marginBottom: 12, flexWrap: "wrap"
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <div style={{ width: 36, height: 36, background: "rgba(217,119,6,0.15)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -126,8 +128,50 @@ export default function SummaryPage() {
         </div>
       )}
 
+      {/* ── Reconciliation Alerts ────────────────────── */}
+      {reconciliationAlerts.length > 0 && (
+        <div style={{
+          background: "rgba(220,38,38,0.06)",
+          border: "1px solid rgba(220,38,38,0.2)",
+          borderRadius: 12, padding: "14px 18px",
+          display: "flex", alignItems: "flex-start", justifyContent: "space-between",
+          gap: 12, marginBottom: 20, flexWrap: "wrap"
+        }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flex: 1 }}>
+            <div style={{ width: 36, height: 36, background: "rgba(220,38,38,0.12)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2" strokeLinecap="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            </div>
+            <div>
+              <p style={{ fontSize: 13, fontWeight: 600, color: "#991b1b", marginBottom: 6 }}>
+                ⚠️ {reconciliationAlerts.length} receipt{reconciliationAlerts.length !== 1 ? "s" : ""} with amount mismatch — needs manual review
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {reconciliationAlerts.map((a: any) => (
+                  <div key={a.receiptId} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                    <Link href="/dashboard/receipts" style={{ fontSize: 12, fontWeight: 600, color: "#dc2626", textDecoration: "none", minWidth: 120 }}>
+                      #{a.receiptId} {a.merchantName}
+                    </Link>
+                    <span style={{ fontSize: 11, color: "var(--text-secondary)" }}>
+                      Declared <strong style={{ color: "var(--text)" }}>{fmtFull(a.declaredTotal)}</strong> vs
+                      Computed <strong style={{ color: "var(--text)" }}>{fmtFull(a.computedTotal)}</strong>
+                    </span>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#dc2626", background: "rgba(220,38,38,0.08)", padding: "2px 6px", borderRadius: 4 }}>
+                      Δ {a.variancePct}% mismatch
+                    </span>
+                    <span style={{ fontSize: 10, color: "var(--text-muted)" }}>[{a.flagType.replace(/_/g, " ")}]</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+          <Link href="/dashboard/receipts" className="btn btn-sm" style={{ background: "#dc2626", color: "white", flexShrink: 0, marginTop: 4 }}>
+            Fix Now →
+          </Link>
+        </div>
+      )}
+
       {/* ── KPI Cards ───────────────────────────────── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 14, marginBottom: 20 }}>
+      <div className="kpi-grid-6" style={{ display: "grid", gridTemplateColumns: "repeat(6,1fr)", gap: 14, marginBottom: 20 }}>
         <MetricCard
           label="Revenue"
           value={fmt(summary.revenue ?? 0)}
@@ -145,6 +189,12 @@ export default function SummaryPage() {
           value={fmt(summary.grossProfit ?? 0)}
           sublabel={`${marginPct.toFixed(1)}% margin`}
           accent={marginPct >= 0 ? "profit" : "danger"}
+        />
+        <MetricCard
+          label="Line Items"
+          value={summary.lineItemCount ?? 0}
+          sublabel="total extracted"
+          accent="accent"
         />
         <MetricCard
           label="Margin Rate"
@@ -225,7 +275,7 @@ export default function SummaryPage() {
       </div>
 
       {/* ── Bottom Row ─────────────────────────────── */}
-      <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 16, marginBottom: 20 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr 1fr", gap: 16, marginBottom: 20 }}>
         {/* Recent Receipts */}
         <div className="card-flat" style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: "1px solid var(--border-subtle)" }}>
@@ -270,6 +320,39 @@ export default function SummaryPage() {
               </tbody>
             </table>
           </div>
+        </div>
+
+        {/* Top Merchants (Revenue) */}
+        <div className="card-flat">
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+            <p style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>Top Merchants</p>
+            <Link href="/dashboard/receipts" style={{ fontSize: 12, color: "var(--accent)", fontWeight: 500, textDecoration: "none" }}>Details →</Link>
+          </div>
+          {topMerchants.length === 0 ? (
+            <div style={{ color: "var(--text-secondary)", fontSize: 12, padding: "8px 0" }}>No merchant data yet</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {topMerchants.map((m: any, i: number) => {
+                const maxVal = topMerchants[0]?.totalValue ?? 1;
+                const pct = Math.min((m.totalValue / maxVal) * 100, 100);
+                return (
+                  <div key={i}>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ fontSize: 12, fontWeight: 500, color: "var(--text)" }}>
+                        <span style={{ color: i === 0 ? "var(--accent)" : "var(--text-secondary)", marginRight: 4 }}>#{i + 1}</span>
+                        {m.merchantName}
+                      </span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "var(--revenue)" }}>{fmt(m.totalValue)}</span>
+                    </div>
+                    <div style={{ height: 5, background: "var(--surface-alt)", borderRadius: 10, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${pct}%`, background: i === 0 ? "var(--revenue)" : i === 1 ? "var(--accent)" : "#94a3b8", borderRadius: 10 }} />
+                    </div>
+                    <p style={{ fontSize: 10, color: "var(--text-secondary)", marginTop: 2 }}>{m.receiptCount} receipt{m.receiptCount !== 1 ? "s" : ""}</p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Flags + Quick Actions */}
@@ -333,12 +416,11 @@ export default function SummaryPage() {
       <style>{`
         .quick-action-link:hover { background: var(--accent-bg) !important; border-color: var(--accent-border) !important; color: var(--accent) !important; }
         .quick-action-link:hover svg { stroke: var(--accent) !important; }
-        @media (max-width: 1024px) {
-          .kpi-grid-5 { grid-template-columns: repeat(3,1fr) !important; }
+        @media (max-width: 1280px) {
+          .kpi-grid-6 { grid-template-columns: repeat(3,1fr) !important; }
         }
         @media (max-width: 768px) {
-          .kpi-grid-5 { grid-template-columns: repeat(2,1fr) !important; }
-          .charts-row { grid-template-columns: 1fr !important; }
+          .kpi-grid-6 { grid-template-columns: repeat(2,1fr) !important; }
         }
       `}</style>
     </div>

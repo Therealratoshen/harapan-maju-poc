@@ -243,11 +243,38 @@ export default function ReceiptsPage() {
                         ))}
                       </div>
 
-                      {/* Right: total + actions */}
+                      {/* Right: total + variance + actions */}
                       <div style={{ textAlign: "right", flexShrink: 0 }}>
-                        <p style={{ fontSize: 16, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-mono)", marginBottom: 8 }}>
+                        {/* Declared total */}
+                        <p style={{ fontSize: 16, fontWeight: 700, color: "var(--text)", fontFamily: "var(--font-mono)", marginBottom: 2 }}>
                           {r.currency !== "IDR" ? `${r.declaredTotal} ${r.currency}` : fmtFull(r.declaredTotal ?? 0)}
                         </p>
+                        {/* Computed total + variance (if different) */}
+                        {(r.computedTotal ?? 0) > 0 && (
+                          <p style={{ fontSize: 11, color: "var(--text-secondary)", fontFamily: "var(--font-mono)", marginBottom: 2 }}>
+                            computed: {fmtFull(r.computedTotal)}
+                          </p>
+                        )}
+                        {(r.computedTotal ?? 0) > 0 && (
+                          <p style={{
+                            fontSize: 11,
+                            fontFamily: "var(--font-mono)",
+                            fontWeight: 600,
+                            color: Math.abs((r.declaredTotal ?? 0) - (r.computedTotal ?? 0)) > 0 ? "var(--danger)" : "var(--profit)",
+                            marginBottom: 6,
+                          }}>
+                            {(() => {
+                              const diff = (r.declaredTotal ?? 0) - (r.computedTotal ?? 0);
+                              const pct  = r.computedTotal ? ((diff / r.computedTotal) * 100).toFixed(1) : "0";
+                              return diff === 0 ? "✓ match" : `Δ Rp ${Math.abs(diff / 1000000).toFixed(1)}M (${pct}%)`;
+                            })()}
+                          </p>
+                        )}
+                        {(r.computedTotal ?? 0) === 0 && !r.lineItems?.length && (
+                          <p style={{ fontSize: 11, color: "var(--warning)", fontWeight: 600, marginBottom: 6 }}>
+                            ⚠ no OCR data
+                          </p>
+                        )}
 
                         {/* Inline reject reason */}
                         {rejectId === r.id ? (
@@ -272,13 +299,26 @@ export default function ReceiptsPage() {
                           </div>
                         ) : (
                           <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", flexWrap: "wrap" }}>
+                            {/* Run OCR — prominent for receipts with no line items */}
                             {!r.lineItems?.length && r.status === "pending" && (
                               <button
-                                className="btn btn-sm btn-outline"
+                                className="btn btn-sm"
+                                style={{ background: "rgba(8,145,178,0.12)", color: "var(--accent)", border: "1px solid rgba(8,145,178,0.3)", fontWeight: 600 }}
                                 disabled={processing === r.id}
                                 onClick={() => handleProcess(r.id)}
                               >
-                                {processing === r.id ? "🔄 OCR..." : "🤖 Run OCR"}
+                                {processing === r.id ? "🔄 OCR berjalan..." : "🤖 Jalankan OCR"}
+                              </button>
+                            )}
+                            {/* Re-run OCR for flagged low-confidence receipts */}
+                            {r.lineItems?.length > 0 && (r.confidence ?? 0) < 0.6 && (
+                              <button
+                                className="btn btn-sm btn-outline"
+                                style={{ fontSize: 11, padding: "4px 8px" }}
+                                disabled={processing === r.id}
+                                onClick={() => handleProcess(r.id)}
+                              >
+                                🔄 Re-OCR
                               </button>
                             )}
                             <button
@@ -348,9 +388,24 @@ export default function ReceiptsPage() {
                           </p>
                         </div>
                       </div>
-                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                         <span className={`badge badge-${r.receiptType}`} style={{ fontSize: 10 }}>{r.receiptType}</span>
                         <span className="badge badge-approved" style={{ fontSize: 10 }}>✓ {r.status}</span>
+                        {/* Variance indicator */}
+                        {(r.computedTotal ?? 0) > 0 && (
+                          <span style={{
+                            fontSize: 10, fontFamily: "var(--font-mono)",
+                            color: Math.abs((r.declaredTotal ?? 0) - (r.computedTotal ?? 0)) > 0 ? "var(--warning)" : "var(--profit)",
+                            fontWeight: 600,
+                          }}>
+                            {(() => {
+                              const diff = (r.declaredTotal ?? 0) - (r.computedTotal ?? 0);
+                              if (diff === 0) return "✓";
+                              const pct = ((Math.abs(diff) / (r.computedTotal ?? 1)) * 100).toFixed(0) + "%";
+                              return `${diff > 0 ? "+" : "−"}${Math.abs(diff / 1000000).toFixed(1)}M (${pct})`;
+                            })()}
+                          </span>
+                        )}
                         <p style={{ fontWeight: 700, fontSize: 13, fontFamily: "var(--font-mono)" }}>
                           {r.currency !== "IDR" ? `${r.declaredTotal} ${r.currency}` : fmtFull(r.declaredTotal ?? 0)}
                         </p>

@@ -105,6 +105,61 @@ export async function GET(request: NextRequest) {
     const flagSummaryRows = rows<{ flag_type: string; count: number }>(await pg().unsafe(`SELECT flag_type, COUNT(*)::int AS count FROM flags WHERE resolved = FALSE GROUP BY flag_type`));
     const flagSummary = flagSummaryRows.map(r => ({ flagType: r.flag_type, count: Number(r.count ?? 0) }));
 
+    // ── Line items count ─────────────────────────────────
+    const [{ lineItemCount }] = await db
+      .select({ lineItemCount: sql<number>`COUNT(*)` })
+      .from(schema.lineItems);
+
+    // ── Top merchants (by approved supplier receipts) ────
+    const topMerchantRows = rows<{ merchant_name: string | null; total_value: number; receipt_count: number }>(
+      await pg().unsafe(`
+        SELECT merchant_name,
+               COALESCE(SUM(declared_total), 0)::int AS total_value,
+               COUNT(*)::int AS receipt_count
+        FROM receipts
+        WHERE status = 'approved' AND receipt_type = 'supplier' AND merchant_name IS NOT NULL
+        GROUP BY merchant_name
+        ORDER BY total_value DESC
+        LIMIT 6
+      `)
+    );
+    const topMerchants = topMerchantRows.map(r => ({
+      merchantName: r.merchant_name ?? "—",
+      totalValue:   Number(r.total_value),
+      receiptCount: Number(r.receipt_count),
+    }));
+
+    // ── Reconciliation alerts (flagged receipts with variance) ─
+    const reconciliationRows = rows<{
+      id: number; merchant_name: string | null; receipt_type: string;
+      declared_total: number; computed_total: number; confidence: number;
+      flag_type: string; flag_message: string;
+    }>(await pg().unsafe(`
+      SELECT r.id, r.merchant_name, r.receipt_type,
+             r.declared_total, r.computed_total, r.confidence,
+             f.flag_type, f.message AS flag_message
+      FROM receipts r
+      JOIN flags f ON f.receipt_id = r.id
+      WHERE r.status = 'flagged' AND f.resolved = FALSE
+        AND f.flag_type IN ('MATH_ERROR', 'MISSING_INVOICE_NO')
+      ORDER BY ABS(r.declared_total - r.computed_total) DESC
+      LIMIT 5
+    `));
+    const reconciliationAlerts = reconciliationRows.map(r => ({
+      receiptId:       r.id,
+      merchantName:    r.merchant_name ?? "—",
+      receiptType:     r.receipt_type,
+      declaredTotal:   Number(r.declared_total),
+      computedTotal:  Number(r.computed_total),
+      variance:        Math.abs(Number(r.declared_total) - Number(r.computed_total)),
+      variancePct:      Number(r.computed_total) > 0
+                        ? Math.abs((Number(r.declared_total) - Number(r.computed_total)) / Number(r.computed_total) * 100).toFixed(1)
+                        : "0",
+      confidence:      Number(r.confidence),
+      flagType:       r.flag_type,
+      flagMessage:     r.flag_message,
+    }));
+
     // ── Computed ────────────────────────────────────────
     const revenue    = Number(revenueResult?.total ?? 0);
     const cogsAmt   = Number(cogsResult?.total    ?? 0);
@@ -130,12 +185,15 @@ export async function GET(request: NextRequest) {
         pendingFlags:     Number(flagCountResult[0]?.count ?? 0),
         totalReceipts:    buyerCount + supplierCount,
         pendingReceipts:  pendingCount,
+        lineItemCount:    Number(lineItemCount ?? 0),
       },
       pendingCount,
       monthly,
       cogsBySupplier,
       recentReceipts,
       flagSummary,
+      topMerchants,
+      reconciliationAlerts,
     });
   } catch (err) {
     console.error("[summary]", err instanceof Error ? err.message : String(err));
