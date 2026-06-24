@@ -122,10 +122,18 @@ export async function GET(request: NextRequest) {
     const flagSummaryRows = rows<{ flag_type: string; count: number }>(await pg().unsafe(`SELECT flag_type, COUNT(*)::int AS count FROM flags WHERE resolved = FALSE GROUP BY flag_type`));
     const flagSummary = flagSummaryRows.map(r => ({ flagType: r.flag_type, count: Number(r.count ?? 0) }));
 
-    // ── Line items count ─────────────────────────────────
-    const [{ lineItemCount }] = await db
-      .select({ lineItemCount: sql<number>`COUNT(*)` })
-      .from(schema.lineItems);
+    // ── Line items count (IDR receipts only) ───────────────
+    // Get all IDR receipt IDs (any status) so we count line items from all of them
+    const allIdrReceiptIds = rows<{ id: number }>(
+      await pg().unsafe(`SELECT id FROM receipts WHERE currency = 'IDR'`)
+    ).map(r => r.id);
+
+    const [{ lineItemCount }] = allIdrReceiptIds.length > 0
+      ? await db
+          .select({ lineItemCount: sql<number>`COUNT(*)` })
+          .from(schema.lineItems)
+          .where(sql`receipt_id IN (${sql.join(allIdrReceiptIds.map(id => sql`${id}`), sql`, `)})`)
+      : [{ lineItemCount: 0 }];
 
     // ── Top merchants — computed from line items ─────────────────
     const merchantRevenueMap: Record<string, { totalValue: number; receiptCount: number }> = {};
@@ -141,7 +149,7 @@ export async function GET(request: NextRequest) {
       .slice(0, 6)
       .map(([merchantName, v]) => ({ merchantName, totalValue: v.totalValue, receiptCount: v.receiptCount }));
 
-    // ── Reconciliation alerts (flagged receipts with variance) ─
+    // ── Reconciliation alerts (IDR, pending/flagged, with MATH_ERROR) ─
     const reconciliationRows = rows<{
       id: number; merchant_name: string | null; receipt_type: string; status: string;
       declared_total: number; computed_total: number; confidence: number;
@@ -152,7 +160,8 @@ export async function GET(request: NextRequest) {
              f.flag_type, f.message AS flag_message
       FROM receipts r
       JOIN flags f ON f.receipt_id = r.id
-      WHERE r.status IN ('pending', 'flagged')
+      WHERE r.currency = 'IDR'
+        AND r.status IN ('pending', 'flagged')
         AND f.resolved = FALSE
         AND f.flag_type IN ('MATH_ERROR', 'MISSING_INVOICE_NO')
       ORDER BY ABS(r.declared_total - r.computed_total) DESC
