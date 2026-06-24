@@ -152,7 +152,8 @@ export async function GET(request: NextRequest) {
              f.flag_type, f.message AS flag_message
       FROM receipts r
       JOIN flags f ON f.receipt_id = r.id
-      WHERE f.resolved = FALSE
+      WHERE r.status IN ('pending', 'flagged')
+        AND f.resolved = FALSE
         AND f.flag_type IN ('MATH_ERROR', 'MISSING_INVOICE_NO')
       ORDER BY ABS(r.declared_total - r.computed_total) DESC
       LIMIT 5

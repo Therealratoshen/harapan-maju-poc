@@ -95,12 +95,16 @@ export async function POST(
     const [countRow] = await pg`SELECT COUNT(*)::int AS cnt FROM flags WHERE receipt_id = ${receiptId} AND resolved = FALSE`;
     await pg.end();
     const unresolvedCount = (countRow as any)?.cnt ?? 0;
-    const newStatus = unresolvedCount > 0 ? "flagged" : "pending";
+    const newStatus = receipt.status === "approved" ? "approved"
+                    : unresolvedCount > 0 ? "flagged" : "pending";
 
-    await db
-      .update(schema.receipts)
-      .set({ status: newStatus as any } as any)
-      .where(eq(schema.receipts.id, receiptId));
+    // Never demote an already-approved receipt — only update pending/flagged
+    if (receipt.status !== "approved") {
+      await db
+        .update(schema.receipts)
+        .set({ status: newStatus as any } as any)
+        .where(eq(schema.receipts.id, receiptId));
+    }
 
     return NextResponse.json({
       success:        true,
