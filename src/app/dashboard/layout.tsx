@@ -6,6 +6,12 @@ import { useState, useEffect } from "react";
 
 // Lucide-style inline SVG icons
 const icons = {
+  movement: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+      <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+    </svg>
+  ),
   grid: (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
@@ -52,11 +58,12 @@ const icons = {
 };
 
 const navItems = [
-  { href: "/dashboard/summary",  label: "Dashboard",  icon: "grid"   },
-  { href: "/dashboard/receipts", label: "Receipts",   icon: "receipt" },
-  { href: "/dashboard/stock",    label: "Stock",       icon: "stock"   },
-  { href: "/dashboard/flags",    label: "Flags",       icon: "flag"    },
-  { href: "/dashboard/upload",   label: "Upload",      icon: "upload"  },
+  { href: "/dashboard/summary",       label: "Dashboard",   icon: "grid"     },
+  { href: "/dashboard/receipts",      label: "Receipts",    icon: "receipt"  },
+  { href: "/dashboard/stock",         label: "Stock",      icon: "stock"    },
+  { href: "/dashboard/stock-movements", label: "Movements",  icon: "movement" },
+  { href: "/dashboard/flags",         label: "Flags",       icon: "flag"     },
+  { href: "/dashboard/upload",        label: "Upload",     icon: "upload"   },
 ];
 
 // Badge state — loaded from API
