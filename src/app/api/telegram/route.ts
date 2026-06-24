@@ -418,48 +418,74 @@ async function onText(chatId: number, text: string) {
   }
 
   // ── omset (revenue) ────────────────────────────────────────────────────
+  // Compute from live line items — source of truth, IDR only
   if (t.includes("omset") || t.includes("revenue") || t.includes("penjualan")) {
-    const [row] = await db.select({ total: sql<number>`COALESCE(SUM(declared_total), 0)` })
+    const approvedSuppliers = await db.select({ id: schema.receipts.id })
       .from(schema.receipts)
       .where(and(sql`receipt_type = 'supplier'`, sql`status = 'approved'`, sql`currency = 'IDR'`));
-    return send(chatId, `<b>📊 Omset</b>\n\nTotal: ${rp(Number(row?.total ?? 0))}`);
+    const ids = approvedSuppliers.map(r => r.id);
+    const items = ids.length > 0
+      ? await db.select({ totalPrice: schema.lineItems.totalPrice }).from(schema.lineItems)
+        .where(sql`receipt_id = ANY(${ids})`)
+      : [];
+    const total = items.reduce((s, li) => s + (li.totalPrice ?? 0), 0);
+    return send(chatId, `<b>📊 Omset</b>\n\nTotal: ${rp(total)}\n(IDR · live dari line items)`);
   }
 
   // ── cogs ───────────────────────────────────────────────────────────────
   if (t.includes("cogs") || t.includes("pembelian") || t.includes("beli")) {
-    const [row] = await db.select({ total: sql<number>`COALESCE(SUM(declared_total), 0)` })
+    const approvedBuyers = await db.select({ id: schema.receipts.id })
       .from(schema.receipts)
       .where(and(sql`receipt_type = 'buyer'`, sql`status = 'approved'`, sql`currency = 'IDR'`));
-    return send(chatId, `<b>💸 Total Pembelian</b>\n\nTotal: ${rp(Number(row?.total ?? 0))}`);
+    const ids = approvedBuyers.map(r => r.id);
+    const items = ids.length > 0
+      ? await db.select({ totalPrice: schema.lineItems.totalPrice }).from(schema.lineItems)
+        .where(sql`receipt_id = ANY(${ids})`)
+      : [];
+    const total = items.reduce((s, li) => s + (li.totalPrice ?? 0), 0);
+    return send(chatId, `<b>💸 Total Pembelian</b>\n\nTotal: ${rp(total)}\n(IDR · live dari line items)`);
   }
 
   // ── margin ─────────────────────────────────────────────────────────────
   if (t.includes("margin") || t.includes("laba") || t.includes("profit")) {
-    const [rev] = await db.select({ total: sql<number>`COALESCE(SUM(declared_total), 0)` })
+    // Fetch approved IDR receipts + line items
+    const approved = await db.select({ id: schema.receipts.id, receiptType: schema.receipts.receiptType })
       .from(schema.receipts)
-      .where(and(sql`receipt_type = 'supplier'`, sql`status = 'approved'`, sql`currency = 'IDR'`));
-    const [cog] = await db.select({ total: sql<number>`COALESCE(SUM(declared_total), 0)` })
-      .from(schema.receipts)
-      .where(and(sql`receipt_type = 'buyer'`, sql`status = 'approved'`, sql`currency = 'IDR'`));
-    const r = Number(rev?.total ?? 0), c = Number(cog?.total ?? 0);
-    const profit = r - c;
-    const pct    = r > 0 ? ((profit / r) * 100).toFixed(1) : "0";
+      .where(and(sql`status = 'approved'`, sql`currency = 'IDR'`));
+    const ids = approved.map(r => r.id);
+    const items = ids.length > 0
+      ? await db.select({ receiptId: schema.lineItems.receiptId, totalPrice: schema.lineItems.totalPrice })
+        .from(schema.lineItems)
+        .where(sql`receipt_id = ANY(${ids})`)
+      : [];
+    const byReceipt: Record<number, number> = {};
+    for (const li of items) { byReceipt[li.receiptId] = (byReceipt[li.receiptId] ?? 0) + (li.totalPrice ?? 0); }
+    let revenue = 0, cogs = 0;
+    for (const r of approved) { const total = byReceipt[r.id] ?? 0; if (r.receiptType === 'supplier') revenue += total; else cogs += total; }
+    const profit = revenue - cogs;
+    const pct    = revenue > 0 ? ((profit / revenue) * 100).toFixed(1) : "0";
     return send(chatId,
       `<b>📈 Margin</b>\n\n` +
-      `Omset:   ${rp(r)}\n` +
-      `Belanja:  ${rp(c)}\n` +
+      `Omset:   ${rp(revenue)}\n` +
+      `Belanja:  ${rp(cogs)}\n` +
       `Laba:     ${rp(profit)}\n` +
-      `Margin:   ${pct}%`
+      `Margin:   ${pct}%\n` +
+      `(IDR · live dari line items)`
     );
   }
 
   // ── stok ───────────────────────────────────────────────────────────────
   if (t.includes("stok") || t.includes("stock") || t.includes("inventory")) {
+    // Filter stock ledger to IDR receipts only
     const stockData = await db.execute(sql<{ sku_name: string | null; balance: number }>`
       SELECT COALESCE(s.normalized_name, 'Unknown') AS sku_name,
              COALESCE(SUM(CASE WHEN sl.movement_type = 'in' THEN sl.quantity ELSE -sl.quantity END), 0) AS balance
-      FROM stock_ledger sl LEFT JOIN skus s ON sl.sku_id = s.id
+      FROM stock_ledger sl
+      LEFT JOIN skus s ON sl.sku_id = s.id
+      LEFT JOIN receipts r ON sl.receipt_id = r.id
+      WHERE r.currency = 'IDR' OR sl.receipt_id IS NULL
       GROUP BY sl.sku_id, s.normalized_name
+      HAVING COALESCE(SUM(CASE WHEN sl.movement_type = 'in' THEN sl.quantity ELSE -sl.quantity END), 0) != 0
       ORDER BY balance DESC LIMIT 8
     `);
     const rows = stockData as any[];

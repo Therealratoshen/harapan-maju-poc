@@ -69,7 +69,12 @@ export async function GET(request: NextRequest) {
 
     const pendingReceipts = (await pg().unsafe(`SELECT COUNT(*)::int AS count FROM receipts WHERE currency = 'IDR' AND status IN ('pending','flagged')`)) as any[];
 
-    const flagCountResult = (await pg().unsafe(`SELECT COUNT(*)::int AS count FROM flags WHERE resolved = FALSE`)) as any[];
+    const flagCountResult = (await pg().unsafe(`
+      SELECT COUNT(*)::int AS count
+      FROM flags f
+      LEFT JOIN receipts r ON f.receipt_id = r.id
+      WHERE f.resolved = FALSE AND (r.currency = 'IDR' OR r.id IS NULL)
+    `)) as any[];
 
     // ── Monthly grouping ────────────────────────────────
     const allApproved = await db
@@ -119,7 +124,13 @@ export async function GET(request: NextRequest) {
       .limit(10);
 
     // ── Flag summary ───────────────────────────────────
-    const flagSummaryRows = rows<{ flag_type: string; count: number }>(await pg().unsafe(`SELECT flag_type, COUNT(*)::int AS count FROM flags WHERE resolved = FALSE GROUP BY flag_type`));
+    const flagSummaryRows = rows<{ flag_type: string; count: number }>(await pg().unsafe(`
+      SELECT f.flag_type, COUNT(*)::int AS count
+      FROM flags f
+      LEFT JOIN receipts r ON f.receipt_id = r.id
+      WHERE f.resolved = FALSE AND (r.currency = 'IDR' OR r.id IS NULL)
+      GROUP BY f.flag_type
+    `));
     const flagSummary = flagSummaryRows.map(r => ({ flagType: r.flag_type, count: Number(r.count ?? 0) }));
 
     // ── Line items count (IDR receipts only) ───────────────

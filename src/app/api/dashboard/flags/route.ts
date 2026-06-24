@@ -21,13 +21,14 @@ export async function GET() {
       })
       .from(schema.flags)
       .leftJoin(schema.receipts, sql`${schema.flags.receiptId} = ${schema.receipts.id}`)
+      .where(sql`receipts.currency = 'IDR' OR ${schema.flags.receiptId} IS NULL`)
       .orderBy(desc(schema.flags.id));
 
     // Count by type — use raw SQL to avoid drizzle GROUP BY column name issues
     let flagCounts: any[] = [];
     try {
       const flagCountsRaw: any[] = await db.execute(
-        sql`SELECT flag_type, COUNT(*)::int as count, SUM(CASE WHEN resolved = FALSE THEN 1 ELSE 0 END)::int as unresolved, COUNT(DISTINCT receipt_id)::int as receipt_count FROM flags GROUP BY flag_type`
+        sql`SELECT f.flag_type, COUNT(*)::int as count, SUM(CASE WHEN f.resolved = FALSE THEN 1 ELSE 0 END)::int as unresolved, COUNT(DISTINCT f.receipt_id)::int as receipt_count FROM flags f LEFT JOIN receipts r ON f.receipt_id = r.id WHERE r.currency = 'IDR' OR f.receipt_id IS NULL GROUP BY f.flag_type`
       );
       flagCounts = flagCountsRaw.map((r: any) => ({
         flagType:     r.flag_type,
