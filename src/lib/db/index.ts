@@ -137,6 +137,19 @@ export function getDb() {
   return _db;
 }
 
+// Expose raw postgres.js instance for unsafe queries
+type PgClient = ReturnType<typeof postgres>;
+let _pgFn: PgClient | null = null;
+export function pg(): PgClient {
+  getDb(); // ensure initialized
+  if (!_pgFn) _pgFn = postgres(process.env.POSTGRES_URL ?? process.env.DATABASE_URL ?? "", {
+    max: 1,
+    ssl: { rejectUnauthorized: false },
+    transform: { undefined: null },
+  });
+  return _pgFn;
+}
+
 // Transparent lazy proxy — routes can use `db.select()` etc. without await
 // The drizzle instance is created on first property access, after env vars are loaded
 export const db = new Proxy({} as ReturnType<typeof drizzle>, {
