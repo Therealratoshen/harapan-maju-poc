@@ -84,75 +84,118 @@ export async function POST(request: NextRequest) {
 
   // ── flags (IDR receipts only) ────────────────────────────────────────
   if (t === "flags" || t.includes("flags") || t.includes("masalah")) {
-    const rows = await safeQuery(
+    // Use raw SQL — count unresolved flags on IDR receipts
+    const rawRows = await safeQuery(
       () => db.execute(sql`
-        SELECT f.flag_type, COUNT(*)::int AS count
-        FROM flags f LEFT JOIN receipts r ON f.receipt_id = r.id
-        WHERE f.resolved = FALSE AND (r.currency = 'IDR' OR r.id IS NULL)
-        GROUP BY f.flag_type ORDER BY count DESC
+        SELECT f.flag_type, COUNT(*)::int AS cnt
+        FROM flags f
+        LEFT JOIN receipts r ON f.receipt_id = r.id
+        WHERE f.resolved = FALSE
+          AND (r.currency = 'IDR' OR r.id IS NULL)
+        GROUP BY f.flag_type
+        ORDER BY cnt DESC
       `),
-      { rows: SAMPLE.flags } as any
+      { rows: [] } as any
     );
-    const list = (rows as any)?.rows ?? [];
-    if (!list || list.length === 0) {
+    const list: any[] = (rawRows as any)?.rows ?? [];
+    if (list.length === 0) {
       return NextResponse.json({ reply: "✅ Tidak ada masalah. Semua bersih." });
     }
-    const total = list.reduce((s: number, f: any) => s + Number(f.count ?? 0), 0);
-    const lines = list.map((f: any) => `🚩 ${String(f.flag_type ?? "?").replace(/_/g, " ")}: ${f.count}`).join("\n");
+    const total = list.reduce((s, f) => s + Number(f.cnt ?? 0), 0);
+    const lines = list.map((f) => `🚩 ${String(f.flag_type ?? "?").replace(/_/g, " ")}: ${f.cnt}`).join("\n");
     return NextResponse.json({ reply: `🚩 ${total} Flags (IDR)\n\n${lines}\n\nReview → /dashboard/flags` });
   }
 
   // ── omset (live from line items, IDR only) ───────────────────────────
   if (t.includes("omset") || t.includes("revenue") || t.includes("penjualan")) {
-    // Compute directly via SQL join — avoids JS-side array handling issues
-    const result = await safeQuery(
-      () => db.execute(sql<{ total: number }>`
-        SELECT COALESCE(SUM(li.total_price), 0)::float8 AS total
-        FROM line_items li
-        JOIN receipts r ON li.receipt_id = r.id
-        WHERE r.receipt_type = 'supplier' AND r.status = 'approved' AND r.currency = 'IDR'
-      `),
-      { rows: [{ total: 0 }] } as any
+    // Fetch approved IDR supplier receipts, then sum their line items
+    const receiptRows = await safeQuery(
+      () => db.select({ id: schema.receipts.id })
+        .from(schema.receipts)
+        .where(and(
+          eq(schema.receipts.receiptType, "supplier"),
+          eq(schema.receipts.status, "approved"),
+          eq(schema.receipts.currency, "IDR"),
+        )),
+      [] as any[]
     );
-    const rows = (result as any)?.rows ?? [];
-    const total = Number(rows[0]?.total ?? 0);
+    const ids = (receiptRows as any[]).map((r: any) => r.id);
+    let total = 0;
+    if (ids.length > 0) {
+      // Use raw SQL subquery to sum in one shot
+      const sumResult = await safeQuery(
+        () => db.execute(sql<{ total: number }>`
+          SELECT COALESCE(SUM(li.total_price), 0)::float8 AS total
+          FROM line_items li
+          WHERE li.receipt_id IN (${sql.join(ids.map(id => sql`${id}`), sql`, `)})
+        `),
+        { rows: [{ total: 0 }] } as any
+      );
+      const rows = (sumResult as any)?.rows ?? [];
+      total = Number(rows[0]?.total ?? 0);
+    }
     return NextResponse.json({ reply: `📊 Omset\n\nTotal: ${rpFull(total)}\n\n(IDR · live dari line items)` });
   }
 
   // ── cogs (live from line items, IDR only) ─────────────────────────────
   if (t.includes("cogs") || t.includes("pembelian") || t.includes("beli")) {
-    const result = await safeQuery(
-      () => db.execute(sql<{ total: number }>`
-        SELECT COALESCE(SUM(li.total_price), 0)::float8 AS total
-        FROM line_items li
-        JOIN receipts r ON li.receipt_id = r.id
-        WHERE r.receipt_type = 'buyer' AND r.status = 'approved' AND r.currency = 'IDR'
-      `),
-      { rows: [{ total: 0 }] } as any
+    const receiptRows = await safeQuery(
+      () => db.select({ id: schema.receipts.id })
+        .from(schema.receipts)
+        .where(and(
+          eq(schema.receipts.receiptType, "buyer"),
+          eq(schema.receipts.status, "approved"),
+          eq(schema.receipts.currency, "IDR"),
+        )),
+      [] as any[]
     );
-    const rows = (result as any)?.rows ?? [];
-    const total = Number(rows[0]?.total ?? 0);
+    const ids = (receiptRows as any[]).map((r: any) => r.id);
+    let total = 0;
+    if (ids.length > 0) {
+      const sumResult = await safeQuery(
+        () => db.execute(sql<{ total: number }>`
+          SELECT COALESCE(SUM(li.total_price), 0)::float8 AS total
+          FROM line_items li
+          WHERE li.receipt_id IN (${sql.join(ids.map(id => sql`${id}`), sql`, `)})
+        `),
+        { rows: [{ total: 0 }] } as any
+      );
+      const rows = (sumResult as any)?.rows ?? [];
+      total = Number(rows[0]?.total ?? 0);
+    }
     return NextResponse.json({ reply: `💸 Total Pembelian\n\nTotal: ${rpFull(total)}\n\n(IDR · live dari line items)` });
   }
 
   // ── margin (live from line items, IDR only) ───────────────────────────
   if (t.includes("margin") || t.includes("laba") || t.includes("profit")) {
-    const result = await safeQuery(
-      () => db.execute(sql<{ type: string; total: number }>`
-        SELECT r.receipt_type AS type,
-               COALESCE(SUM(li.total_price), 0)::float8 AS total
-        FROM line_items li
-        JOIN receipts r ON li.receipt_id = r.id
-        WHERE r.status = 'approved' AND r.currency = 'IDR'
-        GROUP BY r.receipt_type
-      `),
-      { rows: [] } as any
+    const approved = await safeQuery(
+      () => db.select({ id: schema.receipts.id, receiptType: schema.receipts.receiptType })
+        .from(schema.receipts)
+        .where(and(
+          eq(schema.receipts.status, "approved"),
+          eq(schema.receipts.currency, "IDR"),
+        )),
+      [] as any[]
     );
-    const rows = (result as any)?.rows ?? [];
+    const ids = (approved as any[]).map((r: any) => r.id);
     let rev = 0, cog = 0;
-    for (const row of rows) {
-      if (row.type === "supplier") rev = Number(row.total ?? 0);
-      else cog = Number(row.total ?? 0);
+    if (ids.length > 0) {
+      const sumResult = await safeQuery(
+        () => db.execute(sql<{ id: number; total: number }>`
+          SELECT li.receipt_id AS id, COALESCE(SUM(li.total_price), 0)::float8 AS total
+          FROM line_items li
+          WHERE li.receipt_id IN (${sql.join(ids.map(id => sql`${id}`), sql`, `)})
+          GROUP BY li.receipt_id
+        `),
+        { rows: [] } as any
+      );
+      const rows = (sumResult as any)?.rows ?? [];
+      const byReceipt: Record<number, number> = {};
+      for (const row of rows) { byReceipt[row.id] = Number(row.total ?? 0); }
+      for (const r of approved as any[]) {
+        const t2 = byReceipt[r.id] ?? 0;
+        if (r.receiptType === "supplier") rev += t2; else cog += t2;
+      }
     }
     if (rev === 0 && cog === 0) {
       return NextResponse.json({ reply: `📈 Margin\n\nOmset:   Rp 0\nBelanja:  Rp 0\nLaba:     Rp 0\nMargin:   0.0%\n(IDR · live)` });
@@ -164,28 +207,39 @@ export async function POST(request: NextRequest) {
 
   // ── stok (IDR receipts only) ───────────────────────────────────────────
   if (t.includes("stok") || t.includes("stock") || t.includes("inventory")) {
-    const rows = await safeQuery(
-      () => db.execute(sql`
-        SELECT COALESCE(s.normalized_name, 'Unknown') AS name,
-               COALESCE(SUM(CASE WHEN sl.movement_type = 'in' THEN sl.quantity ELSE -sl.quantity END), 0) AS balance
-        FROM stock_ledger sl
-        LEFT JOIN skus s ON sl.sku_id = s.id
-        LEFT JOIN receipts r ON sl.receipt_id = r.id
-        WHERE r.currency = 'IDR' OR sl.receipt_id IS NULL
-        GROUP BY sl.sku_id, s.normalized_name
-        HAVING COALESCE(SUM(CASE WHEN sl.movement_type = 'in' THEN sl.quantity ELSE -sl.quantity END), 0) != 0
-        ORDER BY balance DESC LIMIT 8
-      `),
-      { rows: SAMPLE.stock } as any
+    // Get stock ledger with IDR receipt filter
+    const ledger = await safeQuery(
+      () => db.select({
+        skuId:   schema.stockLedger.skuId,
+        name:    schema.skus.normalizedName,
+        type:    schema.stockLedger.movementType,
+        qty:     schema.stockLedger.quantity,
+        receiptId: schema.stockLedger.receiptId,
+      })
+        .from(schema.stockLedger)
+        .leftJoin(schema.skus, eq(schema.stockLedger.skuId, schema.skus.id))
+        .leftJoin(schema.receipts, eq(schema.stockLedger.receiptId, schema.receipts.id))
+        .where(sql`receipts.currency = 'IDR' OR ${schema.stockLedger.receiptId} IS NULL`),
+      [] as any[]
     );
-    const list = (rows as any)?.rows ?? [];
-    if (!list || list.length === 0) {
+    const list = (ledger as any[]) ?? [];
+    // Aggregate by SKU
+    const bySku: Record<number, { name: string; balance: number }> = {};
+    for (const row of list) {
+      if (!bySku[row.skuId]) bySku[row.skuId] = { name: row.name ?? "Unknown", balance: 0 };
+      bySku[row.skuId].balance += row.type === "in" ? Number(row.qty ?? 0) : -Number(row.qty ?? 0);
+    }
+    const sorted = Object.entries(bySku)
+      .map(([_, v]) => v)
+      .filter(s => s.balance !== 0)
+      .sort((a, b) => b.balance - a.balance)
+      .slice(0, 8);
+    if (sorted.length === 0) {
       return NextResponse.json({ reply: "📦 Belum ada data stok." });
     }
-    const lines = list.map((s: any) => {
-      const b = Number(s.balance ?? 0);
-      const dot = b > 0 ? "🟢" : b < 0 ? "🔴" : "⚪";
-      return `${dot} ${s.name || "?"}: ${b}`;
+    const lines = sorted.map(s => {
+      const dot = s.balance > 0 ? "🟢" : s.balance < 0 ? "🔴" : "⚪";
+      return `${dot} ${s.name}: ${s.balance}`;
     }).join("\n");
     return NextResponse.json({ reply: `📦 Stok (IDR)\n\n${lines}` });
   }
