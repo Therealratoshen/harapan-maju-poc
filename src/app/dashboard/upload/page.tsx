@@ -26,6 +26,19 @@ export default function UploadPage() {
   const [mode, setMode]       = useState<"file" | "camera">("file");
   const [recentReceipts, setRecentReceipts] = useState<any[]>([]);
   const [loadingRecent, setLoadingRecent] = useState(true);
+  const [receiptType, setReceiptType] = useState<"buyer" | "supplier">("buyer");
+  const [merchantName, setMerchantName] = useState("");
+  const [invoiceNumber, setInvoiceNumber] = useState("");
+  const [receiptDate, setReceiptDate] = useState(new Date().toISOString().split("T")[0]);
+  // Manual entry (no photo)
+  const [manualMode, setManualMode] = useState(false);
+  const [manualType, setManualType] = useState<"buyer" | "supplier">("buyer");
+  const [manualMerchant, setManualMerchant] = useState("");
+  const [manualInvoice, setManualInvoice] = useState("");
+  const [manualDate, setManualDate] = useState(new Date().toISOString().split("T")[0]);
+  const [manualDeclared, setManualDeclared] = useState("");
+  const [manualSaving, setManualSaving] = useState(false);
+  const [manualMsg, setManualMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // Load recent receipts
@@ -65,9 +78,12 @@ export default function UploadPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          fileName: file.name,
-          receiptDate: new Date().toISOString(),
-          base64Image: preview,
+          fileName:      file.name,
+          receiptDate:   new Date().toISOString(),
+          base64Image:  preview,
+          receiptType,
+          merchantName:  merchantName || undefined,
+          invoiceNumber: invoiceNumber || undefined,
         }),
       });
 
@@ -75,10 +91,10 @@ export default function UploadPage() {
 
       if (res.ok) {
         setResult({
-          id: data.id,
-          note: "Receipt uploaded successfully. Review in the Receipts page.",
+          id:      data.id,
+          note:    data.message ?? "Receipt uploaded. Go to Receipts page and click 'Jalankan OCR' to extract data.",
           fileName: file.name,
-          status: "pending",
+          status:  "pending",
         });
         loadRecent();
       } else {
@@ -153,14 +169,47 @@ export default function UploadPage() {
 
         {/* ── Left: Upload area ────────────────────── */}
         <div>
-          {/* Mode toggle */}
-          <div className="tab-group" style={{ marginBottom: 16 }}>
-            <button className={`tab-btn ${mode === "file" ? "active" : ""}`} onClick={() => setMode("file")}>
-              📁 Upload File
-            </button>
-            <button className={`tab-btn ${mode === "camera" ? "active" : ""}`} onClick={() => setMode("camera")}>
-              📷 Use Camera
-            </button>
+          {/* Receipt type + mode */}
+          <div style={{ marginBottom: 16, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            {/* Receipt type */}
+            <div style={{ display: "flex", border: "1px solid var(--border-default)", borderRadius: 10, overflow: "hidden" }}>
+              <button onClick={() => setReceiptType("buyer")} style={{
+                padding: "7px 16px", fontSize: 13, fontWeight: 600, border: "none", borderRight: "1px solid var(--border-default)",
+                cursor: "pointer",
+                background: receiptType === "buyer" ? "var(--accent)" : "var(--surface-alt)",
+                color: receiptType === "buyer" ? "#000" : "var(--text-secondary)",
+              }}>📥 Pembelian (Buyer)</button>
+              <button onClick={() => setReceiptType("supplier")} style={{
+                padding: "7px 16px", fontSize: 13, fontWeight: 600, border: "none",
+                cursor: "pointer",
+                background: receiptType === "supplier" ? "var(--revenue)" : "var(--surface-alt)",
+                color: receiptType === "supplier" ? "#fff" : "var(--text-secondary)",
+              }}>📤 Penjualan (Supplier)</button>
+            </div>
+
+            <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+              <button className={`tab-btn ${mode === "file" ? "active" : ""}`} onClick={() => setMode("file")}>📁 File</button>
+              <button className={`tab-btn ${mode === "camera" ? "active" : ""}`} onClick={() => setMode("camera")}>📷 Camera</button>
+            </div>
+          </div>
+
+          {/* Metadata row */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 14 }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 4 }}>Merchant / Supplier</label>
+              <input value={merchantName} onChange={e => setMerchantName(e.target.value)} placeholder="e.g. Honda Jaya"
+                style={{ width: "100%", background: "var(--surface-alt)", border: "1px solid var(--border-default)", borderRadius: 8, padding: "7px 10px", fontSize: 13, color: "var(--text)", outline: "none", boxSizing: "border-box" }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 4 }}>Invoice Number</label>
+              <input value={invoiceNumber} onChange={e => setInvoiceNumber(e.target.value)} placeholder="e.g. INV-001"
+                style={{ width: "100%", background: "var(--surface-alt)", border: "1px solid var(--border-default)", borderRadius: 8, padding: "7px 10px", fontSize: 13, color: "var(--text)", outline: "none", boxSizing: "border-box", fontFamily: "var(--font-mono)" }} />
+            </div>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 4 }}>Receipt Date</label>
+              <input type="date" value={receiptDate} onChange={e => setReceiptDate(e.target.value)}
+                style={{ width: "100%", background: "var(--surface-alt)", border: "1px solid var(--border-default)", borderRadius: 8, padding: "7px 10px", fontSize: 13, color: "var(--text)", outline: "none", boxSizing: "border-box" }} />
+            </div>
           </div>
 
           {/* Drop zone */}
@@ -386,6 +435,121 @@ export default function UploadPage() {
             ))}
           </div>
         </div>
+      </div>
+
+      {/* ── Manual Entry (no photo needed) ─────────────── */}
+      <div style={{ marginTop: 32 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14 }}>
+          <div>
+            <h2 style={{ fontSize: 18, fontWeight: 700, letterSpacing: "-0.01em", marginBottom: 4 }}>Manual Entry</h2>
+            <p style={{ fontSize: 13, color: "var(--text-secondary)" }}>Enter receipt data directly without uploading a photo</p>
+          </div>
+          <button
+            className="btn btn-outline"
+            onClick={() => setManualMode(!manualMode)}
+          >
+            {manualMode ? "Cancel" : "+ New Manual Entry"}
+          </button>
+        </div>
+
+        {manualMode && (
+          <div style={{ background: "var(--surface-raised)", border: "1px solid var(--border-default)", borderRadius: 14, overflow: "hidden" }}>
+            {/* Type toggle */}
+            <div style={{ padding: "16px 20px 0", display: "flex", gap: 8 }}>
+              <button onClick={() => setManualType("buyer")} style={{
+                padding: "7px 16px", fontSize: 13, fontWeight: 600, border: "2px solid",
+                borderColor: manualType === "buyer" ? "var(--accent)" : "var(--border-default)",
+                borderRadius: 10, cursor: "pointer",
+                background: manualType === "buyer" ? "var(--accent)" : "transparent",
+                color: manualType === "buyer" ? "#000" : "var(--text-secondary)",
+              }}>📥 Pembelian (Buyer)</button>
+              <button onClick={() => setManualType("supplier")} style={{
+                padding: "7px 16px", fontSize: 13, fontWeight: 600, border: "2px solid",
+                borderColor: manualType === "supplier" ? "var(--revenue)" : "var(--border-default)",
+                borderRadius: 10, cursor: "pointer",
+                background: manualType === "supplier" ? "var(--revenue)" : "transparent",
+                color: manualType === "supplier" ? "#fff" : "var(--text-secondary)",
+              }}>📤 Penjualan (Supplier)</button>
+            </div>
+
+            {/* Fields */}
+            <div style={{ padding: "16px 20px", display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 4 }}>Merchant / Supplier *</label>
+                <input value={manualMerchant} onChange={e => setManualMerchant(e.target.value)} placeholder="e.g. Honda Jaya"
+                  style={{ width: "100%", background: "var(--surface-alt)", border: "1px solid var(--border-default)", borderRadius: 8, padding: "8px 10px", fontSize: 13, color: "var(--text)", outline: "none", boxSizing: "border-box" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 4 }}>Invoice Number</label>
+                <input value={manualInvoice} onChange={e => setManualInvoice(e.target.value)} placeholder="e.g. INV-001"
+                  style={{ width: "100%", background: "var(--surface-alt)", border: "1px solid var(--border-default)", borderRadius: 8, padding: "8px 10px", fontSize: 13, color: "var(--text)", outline: "none", boxSizing: "border-box", fontFamily: "var(--font-mono)" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 4 }}>Date</label>
+                <input type="date" value={manualDate} onChange={e => setManualDate(e.target.value)}
+                  style={{ width: "100%", background: "var(--surface-alt)", border: "1px solid var(--border-default)", borderRadius: 8, padding: "8px 10px", fontSize: 13, color: "var(--text)", outline: "none", boxSizing: "border-box" }} />
+              </div>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em", display: "block", marginBottom: 4 }}>
+                  Total Amount (Rp) *
+                </label>
+                <input type="number" min="0" value={manualDeclared} onChange={e => setManualDeclared(e.target.value)} placeholder="e.g. 1500000"
+                  style={{ width: "100%", background: "var(--surface-alt)", border: "1px solid var(--border-default)", borderRadius: 8, padding: "8px 10px", fontSize: 14, color: "var(--text)", outline: "none", boxSizing: "border-box", fontFamily: "var(--font-mono)" }} />
+              </div>
+            </div>
+
+            {manualMsg && (
+              <div style={{ margin: "0 20px 14px", padding: "10px 14px", borderRadius: 8, fontSize: 13, fontWeight: 500,
+                background: manualMsg.ok ? "rgba(0,255,148,0.08)" : "rgba(220,38,38,0.08)",
+                color: manualMsg.ok ? "var(--profit)" : "var(--danger)",
+                border: `1px solid ${manualMsg.ok ? "rgba(0,255,148,0.2)" : "rgba(220,38,38,0.2)"}`,
+              }}>{manualMsg.text}</div>
+            )}
+
+            <div style={{ padding: "0 20px 16px", display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button className="btn btn-ghost" onClick={() => setManualMode(false)}>Cancel</button>
+              <button
+                className="btn"
+                disabled={manualSaving || !manualMerchant || !manualDeclared}
+                onClick={async () => {
+                  if (!manualMerchant || !manualDeclared) { setManualMsg({ text: "Merchant name and total amount are required", ok: false }); return; }
+                  setManualSaving(true);
+                  setManualMsg(null);
+                  try {
+                    const res = await fetch("/api/receipts", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        receiptType: manualType,
+                        merchantName: manualMerchant,
+                        invoiceNumber: manualInvoice || undefined,
+                        receiptDate: new Date(manualDate).toISOString(),
+                        declaredTotal: parseInt(manualDeclared) || 0,
+                        computedTotal: parseInt(manualDeclared) || 0,
+                      }),
+                    });
+                    const d = await res.json();
+                    if (!res.ok) { setManualMsg({ text: d.error ?? "Failed", ok: false }); }
+                    else {
+                      setManualMsg({ text: `✓ Receipt #${d.id} created. Go to Receipts to add line items.`, ok: true });
+                      setManualMerchant(""); setManualInvoice(""); setManualDeclared("");
+                      loadRecent();
+                    }
+                  } catch { setManualMsg({ text: "Network error", ok: false }); }
+                  finally { setManualSaving(false); }
+                }}
+                style={{
+                  background: manualType === "supplier" ? "var(--revenue)" : "var(--accent)",
+                  border: "none", color: "#fff",
+                  opacity: (manualSaving || !manualMerchant || !manualDeclared) ? 0.6 : 1,
+                  cursor: (manualSaving || !manualMerchant || !manualDeclared) ? "not-allowed" : "pointer",
+                }}
+              >
+                {manualSaving ? "Saving…" : "✓ Save Receipt"}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       <style>{`

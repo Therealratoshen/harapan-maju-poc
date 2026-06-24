@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { eq, and, like, desc, sql, or } from "drizzle-orm";
-import { mkdir, writeFile } from "fs/promises";
-import { join } from "path";
+import { put } from "@vercel/blob";
+
+function rp(n: number) {
+  return `Rp ${n.toLocaleString("id-ID")}`;
+}
 
 // ─── GET /api/receipts ────────────────────────────────────────────────────────
 export async function GET(request: NextRequest) {
@@ -34,7 +37,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Also fetch line items for each receipt
+    // Fetch receipts + line items + flags
     const receipts = await db
       .select()
       .from(schema.receipts)
@@ -42,7 +45,6 @@ export async function GET(request: NextRequest) {
       .orderBy(desc(schema.receipts.receiptDate))
       .limit(limit);
 
-    // Fetch line items and flags for these receipts
     const receiptIds = receipts.map(r => r.id);
     const allLineItems = receiptIds.length > 0
       ? await db.select().from(schema.lineItems)
@@ -73,13 +75,15 @@ export async function GET(request: NextRequest) {
 }
 
 // ─── POST /api/receipts ──────────────────────────────────────────────────────
-// Creates a new pending receipt. If base64Image is provided, saves to disk.
+// Creates a new pending receipt.
+// If base64Image is provided, saves to Vercel Blob (persistent).
+// Accepts receiptType: "buyer" (pengeluaran/beli) or "supplier" (pemasukan/jual).
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const {
       base64Image,
-      fileName = "receipt.jpg",
+      fileName  = "receipt.jpg",
       receiptDate,
       receiptType = "buyer",
       merchantName = "—",
@@ -91,20 +95,22 @@ export async function POST(request: NextRequest) {
 
     if (base64Image) {
       try {
-        const uploadDir = join(process.cwd(), "public", "uploads");
-        await mkdir(uploadDir, { recursive: true });
-
-        // Strip data URI prefix if present
+        // Strip data URI prefix
         const base64Data = base64Image.replace(/^data:image\/\w+;base64,/, "");
-        const buffer = Buffer.from(base64Data, "base64");
+        const buffer     = Buffer.from(base64Data, "base64");
+        const ext       = fileName.toLowerCase().includes(".png") ? "png" : "jpg";
+        const filename  = `receipt_${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+        const contentType = ext === "png" ? "image/png" : "image/jpeg";
 
-        const ext = fileName.toLowerCase().includes(".png") ? "png" : "jpg";
-        const filename = `upload_${Date.now()}.${ext}`;
-        await writeFile(join(uploadDir, filename), buffer);
-        imageUrl = `/uploads/${filename}`;
-      } catch (fsErr) {
-        console.error("Failed to save image:", fsErr);
-        // Continue without image — receipt is still created
+        // Upload to Vercel Blob (persistent across cold starts)
+        const blob = await put(filename, buffer, {
+          access: "public",
+          contentType,
+        });
+        imageUrl = blob.url;
+      } catch (blobErr) {
+        console.error("[blob upload]", blobErr);
+        // Fallback: skip image, receipt is still created
       }
     }
 
@@ -125,13 +131,23 @@ export async function POST(request: NextRequest) {
       sourceFile: fileName,
     }).returning();
 
+    // Log activity
+    await db.insert(schema.activityLogs).values({
+      action:    "receipt_created",
+      message:   `Receipt #${receipt.id} uploaded via dashboard — ${receiptTypeEnum} — ${merchantName}`,
+      actor:     "dashboard",
+      receiptId: receipt.id,
+    });
+
     return NextResponse.json({
       success: true,
       id: receipt.id,
       status: "pending",
+      imageUrl,
+      message: "Receipt created. Go to Receipts page and click 'Jalankan OCR' to extract data.",
     });
   } catch (err) {
-    console.error(err);
+    console.error("[receipts/post]", err);
     return NextResponse.json({ error: "Failed to create receipt" }, { status: 500 });
   }
 }
