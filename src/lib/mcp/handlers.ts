@@ -61,34 +61,45 @@ async function logActivity(
 
 export async function handleGetSummary(): Promise<McpResult> {
   try {
-    // Revenue: approved supplier receipts, IDR only
-    const [revRow] = await db
-      .select({ total: sql<number>`COALESCE(SUM(declared_total), 0)` })
+    // Fetch all approved IDR receipts + their line items
+    // Revenue/COGS computed from LIVE line item totals (source of truth)
+    const approvedReceipts = await db
+      .select()
       .from(schema.receipts)
       .where(
         and(
-          sql`receipt_type = 'supplier'`,
           sql`status = 'approved'`,
           sql`currency = 'IDR'`,
         )
       );
 
-    // COGS: approved buyer receipts
-    const [cogsRow] = await db
-      .select({ total: sql<number>`COALESCE(SUM(declared_total), 0)` })
-      .from(schema.receipts)
-      .where(
-        and(
-          sql`receipt_type = 'buyer'`,
-          sql`status = 'approved'`,
-          sql`currency = 'IDR'`,
-        )
-      );
+    const receiptIds = approvedReceipts.map(r => r.id);
+    const allLineItems = receiptIds.length > 0
+      ? await db.select().from(schema.lineItems)
+      : [];
 
-    // Receipt counts by status
-    const allRows = await db.select({
-      status: schema.receipts.status,
-    }).from(schema.receipts);
+    // Index line items by receiptId
+    const itemsByReceipt: Record<number, typeof allLineItems> = {};
+    for (const li of allLineItems) {
+      if (!itemsByReceipt[li.receiptId]) itemsByReceipt[li.receiptId] = [];
+      itemsByReceipt[li.receiptId].push(li);
+    }
+
+    // Compute revenue (supplier) and COGS (buyer) from live line items
+    let revenue = 0;
+    let cogs    = 0;
+    for (const r of approvedReceipts) {
+      const items = itemsByReceipt[r.id] ?? [];
+      const total = items.reduce((sum, li) => sum + (li.totalPrice ?? 0), 0);
+      if (r.receiptType === "supplier") revenue += total;
+      else cogs += total;
+    }
+
+    // Receipt counts by status (IDR only)
+    const allRows = await db
+      .select({ status: schema.receipts.status })
+      .from(schema.receipts)
+      .where(sql`currency = 'IDR'`);
 
     const counts = { total: 0, approved: 0, pending: 0, flagged: 0, rejected: 0 };
     for (const r of allRows) {
@@ -99,26 +110,28 @@ export async function handleGetSummary(): Promise<McpResult> {
       else if (r.status === "rejected") counts.rejected++;
     }
 
-    // Line item count
+    // Line item count — only from IDR receipts
     const [{ count: liCount }] = await db
       .select({ count: sql<number>`COUNT(*)` })
-      .from(schema.lineItems);
+      .from(schema.lineItems)
+      .leftJoin(schema.receipts, sql`line_items.receipt_id = receipts.id`)
+      .where(sql`receipts.currency = 'IDR'`);
 
-    // Flag summary
+    // Flag summary — only flags on IDR receipts
     const flagRows = await db.execute(sql`
-      SELECT flag_type,
-             COALESCE(SUM(CASE WHEN resolved IS FALSE THEN 1 ELSE 0 END), 0)::int AS unresolved,
+      SELECT f.flag_type,
+             COALESCE(SUM(CASE WHEN f.resolved IS FALSE THEN 1 ELSE 0 END), 0)::int AS unresolved,
              COUNT(*)::int AS total
-      FROM flags GROUP BY flag_type
+      FROM flags f
+      LEFT JOIN receipts r ON f.receipt_id = r.id
+      WHERE r.currency = 'IDR' OR r.id IS NULL
+      GROUP BY f.flag_type
     `);
     const flagSummary = rows<{ flag_type: string; unresolved: number; total: number }>(flagRows).map(r => ({
       flagType: r.flag_type,
       unresolved: Number(r.unresolved ?? 0),
       total: Number(r.total ?? 0),
     }));
-
-    const revenue = Number(revRow?.total ?? 0);
-    const cogs    = Number(cogsRow?.total ?? 0);
 
     return ok({
       totalRevenue:  revenue,
@@ -310,10 +323,11 @@ export async function handleGetRevenueTrends(args: Record<string, unknown>): Pro
     }>`
       SELECT
         to_char(r.receipt_date, 'YYYY-MM') AS month,
-        COALESCE(SUM(CASE WHEN r.receipt_type = 'supplier' AND r.status = 'approved' THEN r.declared_total ELSE 0 END), 0) AS total_revenue,
-        COALESCE(SUM(CASE WHEN r.receipt_type = 'buyer'    AND r.status = 'approved' THEN r.declared_total ELSE 0 END), 0) AS total_cogs,
-        COUNT(*)::int AS receipt_count
+        COALESCE(SUM(CASE WHEN r.receipt_type = 'supplier' THEN li.total_price ELSE 0 END), 0) AS total_revenue,
+        COALESCE(SUM(CASE WHEN r.receipt_type = 'buyer'    THEN li.total_price ELSE 0 END), 0) AS total_cogs,
+        COUNT(DISTINCT r.id)::int AS receipt_count
       FROM receipts r
+      LEFT JOIN line_items li ON r.id = li.receipt_id
       WHERE EXTRACT(YEAR FROM r.receipt_date) = ${year} AND r.status = 'approved' AND r.currency = 'IDR'
       GROUP BY to_char(r.receipt_date, 'YYYY-MM')
       ORDER BY month
@@ -345,12 +359,13 @@ export async function handleGetTopMerchants(args: Record<string, unknown>): Prom
       receipt_count: number;
     }>`
       SELECT
-        merchant_name,
-        COALESCE(SUM(declared_total), 0) AS total_value,
-        COUNT(*)::int AS receipt_count
-      FROM receipts
-      WHERE status = 'approved' AND merchant_name IS NOT NULL AND currency = 'IDR'
-      GROUP BY merchant_name
+        r.merchant_name,
+        COALESCE(SUM(li.total_price), 0) AS total_value,
+        COUNT(DISTINCT r.id)::int AS receipt_count
+      FROM receipts r
+      LEFT JOIN line_items li ON r.id = li.receipt_id
+      WHERE r.status = 'approved' AND r.merchant_name IS NOT NULL AND r.currency = 'IDR'
+      GROUP BY r.merchant_name
       ORDER BY total_value DESC
       LIMIT ${limit}
     `);
