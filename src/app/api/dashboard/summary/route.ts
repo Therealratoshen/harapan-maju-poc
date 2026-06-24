@@ -167,24 +167,27 @@ export async function GET(request: NextRequest) {
       ORDER BY ABS(r.declared_total - r.computed_total) DESC
       LIMIT 5
     `));
-    const reconciliationAlerts = reconciliationRows.map(r => {
-      const liveComputed = receiptComputedMap[r.id] ?? Number(r.computed_total);
-      const variance    = Math.abs(Number(r.declared_total) - liveComputed);
-      const variancePct = liveComputed > 0 ? Math.abs(variance / liveComputed * 100).toFixed(1) : "0";
-      return {
-        receiptId:    r.id,
-        merchantName: r.merchant_name ?? "—",
-        receiptType: r.receipt_type,
-        status:      r.status,
-        declaredTotal:  Number(r.declared_total),
-        computedTotal: liveComputed,
-        variance:     variance,
-        variancePct:  variancePct,
-        confidence:   Number(r.confidence),
-        flagType:     r.flag_type,
-        flagMessage:  r.flag_message,
-      };
-    });
+    // Only include receipts where at least one of declared/computed is non-zero
+    const reconciliationAlerts = reconciliationRows
+      .map(r => {
+        const liveComputed = receiptComputedMap[r.id] ?? Number(r.computed_total);
+        const variance    = Math.abs(Number(r.declared_total) - liveComputed);
+        const variancePct = liveComputed > 0 ? Math.abs(variance / liveComputed * 100).toFixed(1) : "0";
+        return {
+          receiptId:    r.id,
+          merchantName: r.merchant_name ?? "—",
+          receiptType: r.receipt_type,
+          status:      r.status,
+          declaredTotal:  Number(r.declared_total),
+          computedTotal: liveComputed,
+          variance:     variance,
+          variancePct:  variancePct,
+          confidence:   Number(r.confidence),
+          flagType:     r.flag_type,
+          flagMessage:  r.flag_message,
+        };
+      })
+      .filter(a => a.declaredTotal > 0 || a.computedTotal > 0);
 
     // ── Computed ────────────────────────────────────────
     const grossProfit = revenue - cogs;
