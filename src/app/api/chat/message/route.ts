@@ -161,8 +161,7 @@ export async function POST(request: NextRequest) {
 
   // ── stok (IDR receipts only) ───────────────────────────────────────────
   if (t.includes("stok") || t.includes("stock") || t.includes("inventory")) {
-    // Direct raw SQL — no safeQuery wrapping to surface real errors
-    const rawRows = await db.execute(sql`
+    const rawRows = await pg().unsafe(`
       SELECT COALESCE(s.normalized_name, 'Unknown') AS name,
              COALESCE(SUM(CASE WHEN sl.movement_type = 'in' THEN sl.quantity ELSE -sl.quantity END), 0) AS balance
       FROM stock_ledger sl
@@ -173,7 +172,7 @@ export async function POST(request: NextRequest) {
       HAVING COALESCE(SUM(CASE WHEN sl.movement_type = 'in' THEN sl.quantity ELSE -sl.quantity END), 0) != 0
       ORDER BY balance DESC LIMIT 8
     `);
-    const list: any[] = (rawRows as any)?.rows ?? [];
+    const list: any[] = (rawRows as any[]) ?? [];
     if (!list || list.length === 0) {
       return NextResponse.json({ reply: "📦 Belum ada data stok." });
     }
