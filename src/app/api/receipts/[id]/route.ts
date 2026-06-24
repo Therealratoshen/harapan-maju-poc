@@ -1,11 +1,76 @@
 /**
- * PATCH /api/receipts/[id]
- * Update receipt metadata (merchantName, receiptDate, invoiceNumber, status, notes)
+ * GET  /api/receipts/[id] — fetch single receipt with line items + flags
+ * PATCH /api/receipts/[id] — update receipt metadata
+ * DELETE /api/receipts/[id] — delete receipt + cascade to line items + flags
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
+
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const parsedId = parseInt(id);
+  if (!parsedId) return NextResponse.json({ error: "Invalid receipt ID" }, { status: 400 });
+
+  try {
+    const [receipt] = await db
+      .select()
+      .from(schema.receipts)
+      .where(eq(schema.receipts.id, parsedId));
+
+    if (!receipt) return NextResponse.json({ error: "Receipt not found" }, { status: 404 });
+
+    const lineItems = await db
+      .select()
+      .from(schema.lineItems)
+      .where(eq(schema.lineItems.receiptId, parsedId));
+
+    const flags = await db
+      .select()
+      .from(schema.flags)
+      .where(eq(schema.flags.receiptId, parsedId));
+
+    const computedTotal = lineItems.reduce((sum, li) => sum + (li.totalPrice ?? 0), 0);
+
+    return NextResponse.json({ ...receipt, lineItems, flags, computedTotal });
+  } catch (err) {
+    console.error("[receipts/get]", err);
+    return NextResponse.json({ error: "Failed to fetch receipt" }, { status: 500 });
+  }
+}
+
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const parsedId = parseInt(id);
+  if (!parsedId) return NextResponse.json({ error: "Invalid receipt ID" }, { status: 400 });
+
+  try {
+    // Cascade: delete line items + flags first
+    await db.delete(schema.lineItems).where(eq(schema.lineItems.receiptId, parsedId));
+    await db.delete(schema.flags).where(eq(schema.flags.receiptId, parsedId));
+    // Also delete any stock ledger entries for this receipt
+    await db.delete(schema.stockLedger).where(eq(schema.stockLedger.receiptId, parsedId));
+    // Delete the receipt
+    const [deleted] = await db
+      .delete(schema.receipts)
+      .where(eq(schema.receipts.id, parsedId))
+      .returning();
+
+    if (!deleted) return NextResponse.json({ error: "Receipt not found" }, { status: 404 });
+
+    return NextResponse.json({ success: true, deleted: deleted.id });
+  } catch (err) {
+    console.error("[receipts/delete]", err);
+    return NextResponse.json({ error: "Failed to delete receipt" }, { status: 500 });
+  }
+}
 
 export async function PATCH(
   request: NextRequest,
