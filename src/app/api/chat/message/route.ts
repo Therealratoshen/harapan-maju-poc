@@ -85,22 +85,28 @@ export async function POST(request: NextRequest) {
 
   // ── flags (IDR receipts only) ────────────────────────────────────────
   if (t === "flags" || t.includes("flags") || t.includes("masalah")) {
-    const rawRows = await db.execute(sql`
-      SELECT f.flag_type, COUNT(*)::int AS cnt
-      FROM flags f
-      LEFT JOIN receipts r ON f.receipt_id = r.id
-      WHERE f.resolved = FALSE
-        AND (r.currency = 'IDR' OR r.id IS NULL)
-      GROUP BY f.flag_type
-      ORDER BY cnt DESC
-    `);
-    const list: any[] = (rawRows as any)?.rows ?? [];
-    if (list.length === 0) {
-      return NextResponse.json({ reply: "✅ Tidak ada masalah. Semua bersih." });
+    try {
+      const rawRows = await db.execute(sql`
+        SELECT f.flag_type, COUNT(*)::int AS cnt
+        FROM flags f
+        LEFT JOIN receipts r ON f.receipt_id = r.id
+        WHERE f.resolved = FALSE
+          AND (r.currency = 'IDR' OR r.id IS NULL)
+        GROUP BY f.flag_type
+        ORDER BY cnt DESC
+      `);
+      console.log("[flags query] rawRows:", JSON.stringify(rawRows));
+      const list: any[] = (rawRows as any)?.rows ?? [];
+      if (list.length === 0) {
+        return NextResponse.json({ reply: "✅ Tidak ada masalah. Semua bersih." });
+      }
+      const total = list.reduce((s, f) => s + Number(f.cnt ?? 0), 0);
+      const lines = list.map((f) => `🚩 ${String(f.flag_type ?? "?").replace(/_/g, " ")}: ${f.cnt}`).join("\n");
+      return NextResponse.json({ reply: `🚩 ${total} Flags (IDR)\n\n${lines}\n\nReview → /dashboard/flags` });
+    } catch (err: any) {
+      console.error("[flags error]", err?.message ?? err);
+      return NextResponse.json({ reply: "⚠️ Gagal mengambil data flags." });
     }
-    const total = list.reduce((s, f) => s + Number(f.cnt ?? 0), 0);
-    const lines = list.map((f) => `🚩 ${String(f.flag_type ?? "?").replace(/_/g, " ")}: ${f.cnt}`).join("\n");
-    return NextResponse.json({ reply: `🚩 ${total} Flags (IDR)\n\n${lines}\n\nReview → /dashboard/flags` });
   }
 
   // ── omset (live from line items, IDR only) ───────────────────────────
