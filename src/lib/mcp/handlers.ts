@@ -142,7 +142,7 @@ export async function handleListReceipts(args: Record<string, unknown>): Promise
     const limit = Math.min(Number(args.limit ?? 20), 100);
     const offset = Number(args.offset ?? 0);
 
-    const conds: any[] = [];
+    const conds: any[] = [sql`${schema.receipts.currency} = 'IDR'`];
     if (status)      conds.push(sql`${schema.receipts.status} = ${status}`);
     if (receiptType) conds.push(sql`${schema.receipts.receiptType} = ${receiptType}`);
 
@@ -199,7 +199,7 @@ export async function handleGetFlags(args: Record<string, unknown>): Promise<Mcp
     const unresolvedOnly = args.unresolvedOnly !== false;
     const flagType = args.flagType as string | undefined;
 
-    const conds: any[] = [];
+    const conds: any[] = [sql`receipts.currency = 'IDR'`];
     if (unresolvedOnly) conds.push(eq(schema.flags.resolved, false as any));
     if (flagType)       conds.push(eq(schema.flags.flagType, flagType));
 
@@ -247,6 +247,8 @@ export async function handleGetStock(args: Record<string, unknown>): Promise<Mcp
         COALESCE(SUM(CASE WHEN sl.movement_type = 'in' THEN sl.quantity * sl.unit_price ELSE 0 END), 0) AS stock_value
       FROM stock_ledger sl
       LEFT JOIN skus s ON sl.sku_id = s.id
+      LEFT JOIN receipts r ON sl.receipt_id = r.id AND r.currency = 'IDR'
+      WHERE r.currency = 'IDR' OR sl.receipt_id IS NULL
       GROUP BY sl.sku_id, s.normalized_name, s.part_number, s.category, s.unit
       ORDER BY sl.sku_id
     `);
@@ -312,7 +314,7 @@ export async function handleGetRevenueTrends(args: Record<string, unknown>): Pro
         COALESCE(SUM(CASE WHEN r.receipt_type = 'buyer'    AND r.status = 'approved' THEN r.declared_total ELSE 0 END), 0) AS total_cogs,
         COUNT(*)::int AS receipt_count
       FROM receipts r
-      WHERE EXTRACT(YEAR FROM r.receipt_date) = ${year} AND r.status = 'approved'
+      WHERE EXTRACT(YEAR FROM r.receipt_date) = ${year} AND r.status = 'approved' AND r.currency = 'IDR'
       GROUP BY to_char(r.receipt_date, 'YYYY-MM')
       ORDER BY month
     `);
@@ -347,7 +349,7 @@ export async function handleGetTopMerchants(args: Record<string, unknown>): Prom
         COALESCE(SUM(declared_total), 0) AS total_value,
         COUNT(*)::int AS receipt_count
       FROM receipts
-      WHERE status = 'approved' AND merchant_name IS NOT NULL
+      WHERE status = 'approved' AND merchant_name IS NOT NULL AND currency = 'IDR'
       GROUP BY merchant_name
       ORDER BY total_value DESC
       LIMIT ${limit}
@@ -455,6 +457,7 @@ export async function handleApproveReceipt(args: Record<string, unknown>): Promi
       .limit(1);
 
     if (!receipt) return err(`Receipt ${id} not found`);
+    if (receipt.currency !== "IDR") return err(`Receipt ${id} is ${receipt.currency ?? "non-IDR"} — only IDR receipts can be approved`);
     if (receipt.status === "approved") return err(`Receipt ${id} already approved`);
     if (receipt.status === "rejected") return err(`Receipt ${id} already rejected`);
 
@@ -517,6 +520,7 @@ export async function handleRejectReceipt(args: Record<string, unknown>): Promis
       .limit(1);
 
     if (!receipt) return err(`Receipt ${id} not found`);
+    if (receipt.currency !== "IDR") return err(`Receipt ${id} is ${receipt.currency ?? "non-IDR"} — only IDR receipts can be approved/rejected`);
     if (receipt.status === "approved") return err(`Receipt ${id} already approved`);
     if (receipt.status === "rejected") return err(`Receipt ${id} already rejected`);
 

@@ -7,7 +7,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
-import { eq, desc, sql } from "drizzle-orm";
+import { eq, desc, sql, and } from "drizzle-orm";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -37,7 +37,8 @@ export async function GET(request: NextRequest) {
       })
       .from(schema.stockLedger)
       .leftJoin(schema.skus, eq(schema.stockLedger.skuId, schema.skus.id))
-      .where(conditions.length ? conditions[0] : undefined)
+      .leftJoin(schema.receipts, eq(schema.stockLedger.receiptId, schema.receipts.id))
+      .where(conditions.length ? and(...conditions, sql`receipts.currency = 'IDR'`) : sql`receipts.currency = 'IDR'`)
       .orderBy(desc(schema.stockLedger.id));
 
     // Add source label
