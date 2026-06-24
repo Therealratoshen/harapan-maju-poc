@@ -38,7 +38,9 @@ export async function GET(request: NextRequest) {
       .from(schema.stockLedger)
       .leftJoin(schema.skus, eq(schema.stockLedger.skuId, schema.skus.id))
       .leftJoin(schema.receipts, eq(schema.stockLedger.receiptId, schema.receipts.id))
-      .where(conditions.length ? and(...conditions, sql`receipts.currency = 'IDR'`) : sql`receipts.currency = 'IDR'`)
+      .where(conditions.length
+        ? and(...conditions, sql`(receipts.currency = 'IDR' OR receipts.id IS NULL)`)
+        : sql`(receipts.currency = 'IDR' OR receipts.id IS NULL)`)
       .orderBy(desc(schema.stockLedger.id));
 
     // Add source label
