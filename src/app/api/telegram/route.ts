@@ -420,48 +420,44 @@ async function onText(chatId: number, text: string) {
   // ── omset (revenue) ────────────────────────────────────────────────────
   // Compute from live line items — source of truth, IDR only
   if (t.includes("omset") || t.includes("revenue") || t.includes("penjualan")) {
-    const approvedSuppliers = await db.select({ id: schema.receipts.id })
-      .from(schema.receipts)
-      .where(and(sql`receipt_type = 'supplier'`, sql`status = 'approved'`, sql`currency = 'IDR'`));
-    const ids = approvedSuppliers.map(r => r.id);
-    const items = ids.length > 0
-      ? await db.select({ totalPrice: schema.lineItems.totalPrice }).from(schema.lineItems)
-        .where(sql`receipt_id = ANY(${ids})`)
-      : [];
-    const total = items.reduce((s, li) => s + (li.totalPrice ?? 0), 0);
+    const [row] = await db.execute(sql<{ total: number }>`
+      SELECT COALESCE(SUM(li.total_price), 0)::float8 AS total
+      FROM line_items li
+      JOIN receipts r ON li.receipt_id = r.id
+      WHERE r.receipt_type = 'supplier' AND r.status = 'approved' AND r.currency = 'IDR'
+    `);
+    const total = Number((row as any)?.total ?? 0);
     return send(chatId, `<b>📊 Omset</b>\n\nTotal: ${rp(total)}\n(IDR · live dari line items)`);
   }
 
   // ── cogs ───────────────────────────────────────────────────────────────
   if (t.includes("cogs") || t.includes("pembelian") || t.includes("beli")) {
-    const approvedBuyers = await db.select({ id: schema.receipts.id })
-      .from(schema.receipts)
-      .where(and(sql`receipt_type = 'buyer'`, sql`status = 'approved'`, sql`currency = 'IDR'`));
-    const ids = approvedBuyers.map(r => r.id);
-    const items = ids.length > 0
-      ? await db.select({ totalPrice: schema.lineItems.totalPrice }).from(schema.lineItems)
-        .where(sql`receipt_id = ANY(${ids})`)
-      : [];
-    const total = items.reduce((s, li) => s + (li.totalPrice ?? 0), 0);
+    const [row] = await db.execute(sql<{ total: number }>`
+      SELECT COALESCE(SUM(li.total_price), 0)::float8 AS total
+      FROM line_items li
+      JOIN receipts r ON li.receipt_id = r.id
+      WHERE r.receipt_type = 'buyer' AND r.status = 'approved' AND r.currency = 'IDR'
+    `);
+    const total = Number((row as any)?.total ?? 0);
     return send(chatId, `<b>💸 Total Pembelian</b>\n\nTotal: ${rp(total)}\n(IDR · live dari line items)`);
   }
 
   // ── margin ─────────────────────────────────────────────────────────────
   if (t.includes("margin") || t.includes("laba") || t.includes("profit")) {
-    // Fetch approved IDR receipts + line items
-    const approved = await db.select({ id: schema.receipts.id, receiptType: schema.receipts.receiptType })
-      .from(schema.receipts)
-      .where(and(sql`status = 'approved'`, sql`currency = 'IDR'`));
-    const ids = approved.map(r => r.id);
-    const items = ids.length > 0
-      ? await db.select({ receiptId: schema.lineItems.receiptId, totalPrice: schema.lineItems.totalPrice })
-        .from(schema.lineItems)
-        .where(sql`receipt_id = ANY(${ids})`)
-      : [];
-    const byReceipt: Record<number, number> = {};
-    for (const li of items) { byReceipt[li.receiptId] = (byReceipt[li.receiptId] ?? 0) + (li.totalPrice ?? 0); }
+    const rows = await db.execute(sql<{ type: string; total: number }>`
+      SELECT r.receipt_type AS type,
+             COALESCE(SUM(li.total_price), 0)::float8 AS total
+      FROM line_items li
+      JOIN receipts r ON li.receipt_id = r.id
+      WHERE r.status = 'approved' AND r.currency = 'IDR'
+      GROUP BY r.receipt_type
+    `);
+    const list = rows as any[];
     let revenue = 0, cogs = 0;
-    for (const r of approved) { const total = byReceipt[r.id] ?? 0; if (r.receiptType === 'supplier') revenue += total; else cogs += total; }
+    for (const row of list) {
+      if (row.type === "supplier") revenue = Number(row.total ?? 0);
+      else cogs = Number(row.total ?? 0);
+    }
     const profit = revenue - cogs;
     const pct    = revenue > 0 ? ((profit / revenue) * 100).toFixed(1) : "0";
     return send(chatId,
