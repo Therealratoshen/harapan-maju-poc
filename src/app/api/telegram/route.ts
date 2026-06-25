@@ -211,7 +211,7 @@ async function onPhoto(chatId: number, fileId: string) {
         customerName:  extracted.customer_name ?? null,
         declaredTotal,
         computedTotal,
-        currency:       extracted.currency ?? "IDR",
+        currency:       "IDR",
         confidence,
         status:         "flagged" as any,
         notes:          extracted.notes ?? null,

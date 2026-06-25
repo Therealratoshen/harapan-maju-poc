@@ -236,7 +236,7 @@ export async function POST(
         computedTotal,
         invoiceNumber:  extracted.invoice_number  ?? null,
         customerName:   extracted.customer_name  ?? null,
-        currency:       extracted.currency         ?? "IDR",
+        currency:       "IDR" as any,
         confidence:     extracted.confidence     ?? 0.5,
         notes:          extracted.notes           ?? null,
       })
@@ -294,13 +294,7 @@ export async function POST(
       }
     }
 
-    if (extracted.currency && extracted.currency !== "IDR") {
-      newFlags.push({
-        receiptId,
-        flagType:  "FOREIGN_CURRENCY",
-        message:   `Receipt in ${extracted.currency} — excluded from IDR calculations.`,
-      });
-    }
+    // Note: currency is always IDR — foreign currency receipts are rejected at source
 
     if (!extracted.invoice_number && extracted.receipt_type === "buyer") {
       newFlags.push({ receiptId, flagType: "MISSING_INVOICE_NO", message: "No invoice number detected." });
