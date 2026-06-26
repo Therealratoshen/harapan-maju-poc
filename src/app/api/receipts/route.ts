@@ -46,11 +46,19 @@ export async function GET(request: NextRequest) {
       .limit(limit);
 
     const receiptIds = receipts.map(r => r.id);
+
+    // Load line items and flags only for returned receipts (targeted, not all-table scan)
     const allLineItems = receiptIds.length > 0
-      ? await db.select().from(schema.lineItems)
+      ? await db
+          .select()
+          .from(schema.lineItems)
+          .where(sql`${schema.lineItems.receiptId} IN (${sql.join(receiptIds.map(id => sql`${id}`), sql`, `)})`)
       : [];
     const allFlags = receiptIds.length > 0
-      ? await db.select().from(schema.flags)
+      ? await db
+          .select()
+          .from(schema.flags)
+          .where(sql`${schema.flags.receiptId} IN (${sql.join(receiptIds.map(id => sql`${id}`), sql`, `)})`)
       : [];
 
     const receiptsWithData = receipts.map(r => {
