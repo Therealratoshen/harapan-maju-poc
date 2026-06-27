@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { eq, sql } from "drizzle-orm";
+import { requireApiKey } from "@/lib/auth";
 
 // GET /api/dashboard/stock
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
+
   try {
     // Raw SQL to avoid drizzle GROUP BY column qualification issues
     const stockData = await db.execute(sql<{

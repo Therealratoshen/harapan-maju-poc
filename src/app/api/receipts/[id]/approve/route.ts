@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
+import { requireApiKey } from "@/lib/auth";
 
 const BOT_TOKEN     = process.env.TELEGRAM_BOT_TOKEN     ?? "";
 const OWNER_CHAT_ID = parseInt(process.env.OWNER_CHAT_ID  ?? "0");
@@ -36,12 +37,15 @@ async function notifyApproval(receiptId: number, merchantName: string, declaredT
 
 // ─── Main ──────────────────────────────────────────────────────────────────
 
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const { id } = await params;
-  const receiptId = parseInt(id);
+export async function POST(request: NextRequest) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
+
+  const url = new URL(request.url);
+  const segments = url.pathname.split('/');
+  const idIdx = segments.indexOf('receipts') + 1;
+  const receiptId = parseInt(segments[idIdx] ?? '0');
+  if (!receiptId) return NextResponse.json({ error: "Invalid receipt ID" }, { status: 400 });
 
   if (isNaN(receiptId)) {
     return NextResponse.json({ error: "Invalid receipt ID" }, { status: 400 });

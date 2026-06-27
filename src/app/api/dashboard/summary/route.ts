@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import postgres from "postgres";
+import { requireApiKey } from "@/lib/auth";
 
 function pg() {
   const connStr = process.env.POSTGRES_URL ?? process.env.DATABASE_URL ?? "";
@@ -12,6 +13,9 @@ function rows<T>(result: any): T[] {
 }
 
 export async function GET(request: NextRequest) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
+
   try {
     // ── Revenue & COGS — single join query, no ORM cold-start ──
     const revenueRows = rows<{ receipt_type: string; receipt_id: number; total: number }>(

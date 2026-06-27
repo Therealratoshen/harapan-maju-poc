@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
+import { requireApiKey } from "@/lib/auth";
 import { eq, and, like, desc, sql, or } from "drizzle-orm";
 import { put } from "@vercel/blob";
 
@@ -9,6 +10,9 @@ function rp(n: number) {
 
 // ─── GET /api/receipts ────────────────────────────────────────────────────────
 export async function GET(request: NextRequest) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
+
   const { searchParams } = new URL(request.url);
   const type   = searchParams.get("type");
   const status = searchParams.get("status");
@@ -87,6 +91,9 @@ export async function GET(request: NextRequest) {
 // If base64Image is provided, saves to Vercel Blob (persistent).
 // Accepts receiptType: "buyer" (pengeluaran/beli) or "supplier" (pemasukan/jual).
 export async function POST(request: NextRequest) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
+
   try {
     const body = await request.json();
     const {

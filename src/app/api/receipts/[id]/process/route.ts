@@ -8,6 +8,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
+import { requireApiKey } from "@/lib/auth";
 
 const BOT_TOKEN     = process.env.TELEGRAM_BOT_TOKEN     ?? "";
 const MINIMAX_API_KEY = process.env.MINIMAX_API_KEY       ?? "";
@@ -173,14 +174,16 @@ async function runOCR(imageUrl: string): Promise<any> {
 
 // ─── Main route ─────────────────────────────────────────────────────────────
 
-export async function POST(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const { id } = await params;
-  const receiptId = parseInt(id);
+export async function POST(request: NextRequest) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
 
-  if (isNaN(receiptId)) {
+  const url = new URL(request.url);
+  const segments = url.pathname.split('/');
+  const idIdx = segments.indexOf('receipts') + 1;
+  const receiptId = parseInt(segments[idIdx] ?? '0');
+
+  if (isNaN(receiptId) || receiptId === 0) {
     return NextResponse.json({ error: "Invalid receipt ID" }, { status: 400 });
   }
 

@@ -8,16 +8,20 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { requireApiKey } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
 import postgres from "postgres";
 
-export async function POST(
-  _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const { id } = await params;
-  const receiptId = parseInt(id);
+export async function POST(request: NextRequest) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
+
+  const url = new URL(request.url);
+  const segments = url.pathname.split('/');
+  const idIdx = segments.indexOf('receipts') + 1;
+  const receiptId = parseInt(segments[idIdx] ?? '0');
+  if (!receiptId) return NextResponse.json({ error: "Invalid receipt ID" }, { status: 400 });
   if (!receiptId) return NextResponse.json({ error: "Invalid receipt ID" }, { status: 400 });
 
   try {

@@ -8,8 +8,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { eq, desc, sql, and } from "drizzle-orm";
+import { requireApiKey } from "@/lib/auth";
 
 export async function GET(request: NextRequest) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
+
   const { searchParams } = new URL(request.url);
   const skuId = searchParams.get("skuId");
   const type   = searchParams.get("type");

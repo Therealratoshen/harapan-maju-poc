@@ -11,8 +11,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { TOOL_HANDLERS } from "@/lib/mcp/handlers";
 import { MCP_TOOLS } from "@/lib/mcp/tools";
+import { requireApiKey } from "@/lib/auth";
 
 export async function POST(request: NextRequest) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
   try {
     const body = await request.json();
     const { jsonrpc, id, method, params } = body;

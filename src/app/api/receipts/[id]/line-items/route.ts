@@ -5,11 +5,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
+import { requireApiKey } from "@/lib/auth";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
+
   const { id } = await params;
   const receiptId = parseInt(id);
   if (!receiptId) return NextResponse.json({ error: "Invalid receipt ID" }, { status: 400 });
@@ -32,6 +36,9 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
+
   const { id } = await params;
   const receiptId = parseInt(id);
   if (!receiptId) return NextResponse.json({ error: "Invalid receipt ID" }, { status: 400 });

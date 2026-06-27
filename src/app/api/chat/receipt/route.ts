@@ -4,11 +4,15 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { requireApiKey } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 
 export async function POST(request: NextRequest) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
+
   try {
     const formData = await request.formData();
     const image = formData.get("image") as File | null;

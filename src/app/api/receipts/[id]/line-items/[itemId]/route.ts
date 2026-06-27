@@ -5,11 +5,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
+import { requireApiKey } from "@/lib/auth";
 
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; itemId: string }> }
 ) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
+
   const { itemId } = await params;
   const itemIdNum = parseInt(itemId);
   if (!itemIdNum) return NextResponse.json({ error: "Invalid item ID" }, { status: 400 });
@@ -47,9 +51,12 @@ export async function PUT(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string; itemId: string }> }
 ) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
+
   const { itemId } = await params;
   const itemIdNum = parseInt(itemId);
   if (!itemIdNum) return NextResponse.json({ error: "Invalid item ID" }, { status: 400 });

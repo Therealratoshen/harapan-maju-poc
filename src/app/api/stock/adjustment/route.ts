@@ -9,10 +9,14 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { requireApiKey } from "@/lib/auth";
 import { db, schema } from "@/lib/db";
 import { eq, sql } from "drizzle-orm";
 
 export async function POST(request: NextRequest) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
+
   try {
     const body = await request.json();
     const { skuId, quantity, type, notes, unitPrice, customerName } = body;

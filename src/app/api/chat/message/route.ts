@@ -6,6 +6,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema, pg } from "@/lib/db";
+import { requireApiKey } from "@/lib/auth";
 import { eq, desc, asc, and, sql } from "drizzle-orm";
 
 function rpFull(n: number) {
@@ -55,8 +56,12 @@ function formatReceipts(rows: any[]) {
 }
 
 export async function POST(request: NextRequest) {
-  const { text } = await request.json().catch(() => ({ text: "" }));
-  const t = (text ?? "").trim().toLowerCase();
+  const authError = requireApiKey(request);
+  if (authError) return authError;
+
+  try {
+    const { text } = await request.json().catch(() => ({ text: "" }));
+    const t = (text ?? "").trim().toLowerCase();
 
   // ── receipt
   if (t === "receipt" || t.includes("receipt") || t === "struk" || t === "daftar") {
@@ -189,6 +194,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ reply: `📋 Perintah:\n\nreceipt  — daftar terbaru\npending  — belum di-review\nflags    — masalah\nomset    — penjualan\ncogs     — pembelian\nmargin    — laba\nstok     — inventory\n\nAtau kirim foto receipt 📸` });
   }
 
-  // ── default
-  return NextResponse.json({ reply: `Tidak paham "${text}".\n\nKetik "help" untuk lihat perintah, atau kirim foto receipt 📸` });
+    // ── default
+    return NextResponse.json({ reply: `Tidak paham "${text}".\n\nKetik "help" untuk lihat perintah, atau kirim foto receipt 📸` });
+  } catch (err) {
+    console.error("[chat/message]", err);
+    return NextResponse.json({ reply: "Terjadi kesalahan." }, { status: 500 });
+  }
 }

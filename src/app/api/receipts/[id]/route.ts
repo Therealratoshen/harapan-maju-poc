@@ -7,11 +7,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
+import { requireApiKey } from "@/lib/auth";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
+
   const { id } = await params;
   const parsedId = parseInt(id);
   if (!parsedId) return NextResponse.json({ error: "Invalid receipt ID" }, { status: 400 });
@@ -44,11 +48,14 @@ export async function GET(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
   const parsedId = parseInt(id);
+  const authErrorDel = requireApiKey(request);
+  if (authErrorDel) return authErrorDel;
+
   if (!parsedId) return NextResponse.json({ error: "Invalid receipt ID" }, { status: 400 });
 
   try {
@@ -76,6 +83,9 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const authErrorPatch = requireApiKey(request);
+  if (authErrorPatch) return authErrorPatch;
+
   const { id } = await params;
   const parsedId = parseInt(id);
   if (!parsedId) return NextResponse.json({ error: "Invalid receipt ID" }, { status: 400 });

@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { eq, desc, sql } from "drizzle-orm";
+import { requireApiKey } from "@/lib/auth";
 
 // GET /api/dashboard/flags
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const authError = requireApiKey(request);
+  if (authError) return authError;
+
   try {
     // Use raw SQL join to avoid drizzle GROUP BY column qualification issues
     const flags = await db
