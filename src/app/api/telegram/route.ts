@@ -4,6 +4,7 @@
  * Features:
  * - Auth via AUTHORIZED_GROUP_ID (optional — bot works in any chat if not set)
  * - Photo → Vercel Blob storage → MiniMax OCR → auto-creates line items
+ * - Conversational AI chat (MiniMax) — answers questions about the business
  * - Text commands: /approve, /reject, /flag, receipt, pending, flags, omset, cogs, margin, stok
  * - /set buyer | /set supplier — toggle receipt type
  */
@@ -292,7 +293,137 @@ async function onPhoto(chatId: number, fileId: string) {
   }
 }
 
-// ─── onText ────────────────────────────────────────────────────────────────
+// ─── AI Chat Memory (per user, 10 msg each) ───────────────────────────────
+const chatHistory = new Map<number, Array<{ role: string; content: string }>>();
+const MAX_HISTORY = 10;
+
+function getHistory(chatId: number) {
+  return chatHistory.get(chatId) ?? [];
+}
+
+function addHistory(chatId: number, role: string, content: string) {
+  const history = getHistory(chatId);
+  history.push({ role, content });
+  if (history.length > MAX_HISTORY) history.shift();
+  chatHistory.set(chatId, history);
+}
+
+// ─── Build system context for AI ─────────────────────────────────────────
+
+async function buildSystemContext(): Promise<string> {
+  try {
+    // Fetch live stats
+    const [revRow] = await db.execute(sql<{ total: number }>`
+      SELECT COALESCE(SUM(li.total_price), 0)::float8 AS total
+      FROM line_items li JOIN receipts r ON li.receipt_id = r.id
+      WHERE r.receipt_type = 'supplier' AND r.status = 'approved' AND r.currency = 'IDR'
+    `);
+    const [cogsRow] = await db.execute(sql<{ total: number }>`
+      SELECT COALESCE(SUM(li.total_price), 0)::float8 AS total
+      FROM line_items li JOIN receipts r ON li.receipt_id = r.id
+      WHERE r.receipt_type = 'buyer' AND r.status = 'approved' AND r.currency = 'IDR'
+    `);
+    const [pendingRow] = await db.execute(sql<{ count: number }>`
+      SELECT COUNT(*)::int AS count FROM receipts WHERE currency = 'IDR' AND status IN ('pending','flagged')
+    `);
+    const [flagRow] = await db.execute(sql<{ count: number }>`
+      SELECT COUNT(*)::int AS count FROM flags f
+      LEFT JOIN receipts r ON f.receipt_id = r.id
+      WHERE f.resolved = FALSE AND (r.currency = 'IDR' OR r.id IS NULL)
+    `);
+    const [stockRows] = await db.execute(sql<{ name: string | null; balance: number }>`
+      SELECT COALESCE(s.normalized_name, 'Unknown') AS name,
+             COALESCE(SUM(CASE WHEN sl.movement_type = 'in' THEN sl.quantity ELSE -sl.quantity END), 0) AS balance
+      FROM stock_ledger sl LEFT JOIN skus s ON sl.sku_id = s.id
+      LEFT JOIN receipts r ON sl.receipt_id = r.id
+      WHERE r.currency = 'IDR' OR sl.receipt_id IS NULL
+      GROUP BY sl.sku_id, s.normalized_name
+      HAVING COALESCE(SUM(CASE WHEN sl.movement_type = 'in' THEN sl.quantity ELSE -sl.quantity END), 0) != 0
+      ORDER BY balance DESC LIMIT 5
+    `);
+
+    const revenue = Number((revRow as any)?.total ?? 0);
+    const cogs    = Number((cogsRow as any)?.total ?? 0);
+    const pending = Number((pendingRow as any)?.count ?? 0);
+    const flags   = Number((flagRow as any)?.count ?? 0);
+    const stocks  = ((stockRows as unknown as any[]) ?? []).map((r: any) => `${r.name}: ${r.balance}`).join(", ");
+
+    return `CURRENT BUSINESS STATE:
+- Revenue (sales/omset): Rp ${revenue.toLocaleString("id-ID")}
+- COGS (pembelian): Rp ${cogs.toLocaleString("id-ID")}
+- Gross Profit: Rp ${(revenue - cogs).toLocaleString("id-ID")} (${revenue > 0 ? ((revenue - cogs) / revenue * 100).toFixed(1) : 0}% margin)
+- Pending receipts: ${pending}
+- Unresolved flags: ${flags}
+- Top stock: ${stocks || "no data"}
+
+CV. HARAPAN MAJU — Business Profile:
+- Indonesian motorbike spare parts shop (sparepart motor)
+- Located in Indonesia, transacts in IDR only
+- Suppliers: PT Capella Patria, Indako, Central Motor, Panca Jaya, MM, Honda Jaya (buy from)
+- Customers: Honda Jaya, Kharisma Jaya, Hasan Jaya, Asoka Jaya, Anugrah, Anjas, Amar (sell to)
+- Common products: oli motor (engine oil), kampas rem (brake pads), ban (tires), spare parts
+- All amounts in IDR. 1 USD ≈ 16,000 IDR
+
+HOW TO HELP:
+- Answer questions about the business, receipts, inventory, and financials
+- Explain the numbers: why is COGS higher than revenue? What does it mean?
+- Advise on pending receipts and flags
+- Help with inventory management questions
+- ALWAYS respond in Indonesian (Bahasa Indonesia) unless user writes in English
+- Be conversational, helpful, and direct — like a smart business assistant
+- If asked for specific numbers, use the CURRENT BUSINESS STATE above
+- If asked about a specific receipt or item not in the state, say "Saya tidak punya data itu" and suggest checking the dashboard`;
+  } catch {
+    return `You are a helpful AI assistant for CV. Harapan Maju — an Indonesian motorbike spare parts shop.
+Respond in Indonesian (Bahasa Indonesia) unless the user writes in English.
+Be conversational, friendly, and informative about the business.`;
+  }
+}
+
+// ─── AI Chat ────────────────────────────────────────────────────────────────
+
+async function handleChat(chatId: number, userText: string): Promise<void> {
+  const history = getHistory(chatId);
+  const systemContext = await buildSystemContext();
+
+  const messages: Array<{ role: string; content: string }> = [
+    { role: "system", content: systemContext },
+    ...history,
+    { role: "user", content: userText },
+  ];
+
+  try {
+    const res = await fetch(MINIMAX_ENDPOINT, {
+      method:  "POST",
+      headers: { "Authorization": `Bearer ${MINIMAX_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "MiniMax-Text-01",
+        messages,
+        temperature: 0.7,
+        max_tokens: 1024,
+      }),
+    });
+
+    if (!res.ok) {
+      console.error("[chat] MiniMax error", res.status);
+      return send(chatId, "Maaf, AI sedang sibuk. Coba lagi sebentar. 🙏");
+    }
+
+    const data    = await res.json();
+    const reply   = (data.choices?.[0]?.message?.content ?? "").trim();
+
+    if (!reply) {
+      return send(chatId, "Maaf, saya tidak bisa menjawab saat ini. 🙏");
+    }
+
+    addHistory(chatId, "user", userText);
+    addHistory(chatId, "assistant", reply);
+    return send(chatId, reply);
+  } catch (err) {
+    console.error("[chat]", err);
+    return send(chatId, "Maaf, terjadi kesalahan. Coba lagi. 🙏");
+  }
+}
 
 async function onText(chatId: number, text: string) {
   const t = text.trim().toLowerCase();
@@ -360,12 +491,10 @@ async function onText(chatId: number, text: string) {
   // ── /help or /start ───────────────────────────────────────────────────
   if (t === "/start" || t === "/help" || t === "help") {
     return send(chatId,
-      `<b>CV. Harapan Maju Bot</b>\n\n` +
-      `📸 Kirim foto receipt → OCR otomatis\n\n` +
+      `<b>🤖 CV. Harapan Maju Bot</b>\n\n` +
+      `📸 Kirim foto receipt → OCR otomatis\n` +
+      `💬 Tanya apa saja → AI chat langsung\n\n` +
       `Perintah:\n` +
-      `• /approve #id — approve receipt\n` +
-      `• /reject #id [reason] — reject\n` +
-      `• /flag #id TYPE [msg] — flag receipt\n` +
       `• receipt — daftar terbaru\n` +
       `• pending — belum di-review\n` +
       `• flags — masalah\n` +
@@ -373,7 +502,10 @@ async function onText(chatId: number, text: string) {
       `• cogs — pembelian\n` +
       `• margin — laba\n` +
       `• stok — inventory\n` +
-      `• /set_buyer | /set_supplier — mode receipt`
+      `• /approve #id — approve\n` +
+      `• /reject #id [reason]\n` +
+      `• /flag #id TYPE [msg]\n` +
+      `• /set_buyer | /set_supplier`
     );
   }
 
@@ -493,13 +625,8 @@ async function onText(chatId: number, text: string) {
     return send(chatId, `<b>📦 Stok</b>\n\n${lines}`);
   }
 
-  // ── default ─────────────────────────────────────────────────────────────
-  return send(chatId,
-    `Tidak paham: "${text}"\n\n` +
-    `Kirim foto receipt, atau ketik:\n` +
-    `receipt · pending · flags · omset · cogs · margin · stok\n` +
-    `/approve #id · /reject #id · /flag #id TYPE`
-  );
+  // ── AI chat — not a command, pass to conversational AI ────────────────
+  return handleChat(chatId, text);
 }
 
 // ─── Webhook ─────────────────────────────────────────────────────────────
