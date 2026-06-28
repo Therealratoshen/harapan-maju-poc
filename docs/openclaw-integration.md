@@ -20,12 +20,18 @@ AUTH:      x-api-key: <INTERNAL_API_KEY>   (set in Vercel env vars)
 
 ### Step 1 — Set the API key in Vercel
 
+⚠️ **Common mistake:** `x_api_key` is an **HTTP header name**, not the Vercel env var name.
+The env var must be called **`INTERNAL_API_KEY`** (the value is your secret key).
+
 1. Open [Vercel → harapan-maju-poc → Settings → Environment Variables](https://vercel.com/filberts-projects-a78ae880/harapan-maju-poc/settings/environment-variables)
 2. Add:
    ```
-   INTERNAL_API_KEY = <your-secret-key>
+   Name:  INTERNAL_API_KEY
+   Value: <your-secret-key>    e.g. 6e5cb24d75c5b7a773bc14129d69307b8ee26f44a06157ef2ae5c448fb3d5287
    ```
+   (The code also accepts env vars named `x_api_key` or `X_API_KEY` if you already created one.)
 3. Redeploy the project (env changes require a new deployment)
+4. Verify: `GET https://harapan-maju-poc.vercel.app/api/auth-check` should show `"configured": true`
 
 ### Step 2 — Disable Vercel SSO (Deployment Protection)
 

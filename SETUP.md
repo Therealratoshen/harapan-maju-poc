@@ -7,7 +7,7 @@ Copy values from `.env.local` (ask the developer for actual values):
 | Variable | Where to get it |
 |---|---|
 | `POSTGRES_URL` | Vercel → Storage → Neon Postgres |
-| `INTERNAL_API_KEY` | Generate a random secret (e.g. `openssl rand -hex 32`) — give this to OpenCLAW |
+| `INTERNAL_API_KEY` | Generate with `openssl rand -hex 32` — **this is the Vercel env var name** (not `x_api_key`) |
 | `TELEGRAM_BOT_TOKEN` | Telegram → @BotFather → `/newbot` |
 | `OWNER_CHAT_ID` | Telegram → @userinfobot |
 | `MINIMAX_API_KEY` | minimaxi.chat → API section |
