@@ -1,14 +1,86 @@
 # OpenCLAW Integration Spec — CV. Harapan Maju
 
 ```
-BASE URL: https://harapan-maju-poc.vercel.app
-AUTH:    (Vercel Team SSO must be disabled in dashboard settings)
-
-⚠️  IMPORTANT: The project has Vercel Team SSO protection enabled.
-To allow OpenCLAW to call these APIs, either:
-  A) Disable SSO: Vercel Dashboard → Project → Settings → Authentication → Off
-  B) Add a custom domain (SSO only applies to *.vercel.app URLs)
+BASE URL:  https://harapan-maju-poc.vercel.app
+MCP URL:   https://harapan-maju-poc.vercel.app/api/mcp
+AUTH:      x-api-key: <INTERNAL_API_KEY>   (set in Vercel env vars)
 ```
+
+---
+
+## Quick Setup for OpenCLAW
+
+### Who needs the API key?
+
+| System | Needs API key? | Why |
+|--------|----------------|-----|
+| **Telegram bot** (`@DuringgAWSS_bot`) | No | Runs inside Vercel, queries Postgres directly via `/api/telegram` |
+| **OpenCLAW** (external agent) | **Yes** | Calls `/api/mcp` from outside Vercel |
+| **Dashboard** (browser) | No | Same-origin requests to Vercel |
+
+### Step 1 — Set the API key in Vercel
+
+1. Open [Vercel → harapan-maju-poc → Settings → Environment Variables](https://vercel.com/filberts-projects-a78ae880/harapan-maju-poc/settings/environment-variables)
+2. Add:
+   ```
+   INTERNAL_API_KEY = <your-secret-key>
+   ```
+3. Redeploy the project (env changes require a new deployment)
+
+### Step 2 — Disable Vercel SSO (Deployment Protection)
+
+Vercel Team SSO blocks external callers before your app code runs.
+
+1. Open [Settings → Authentication](https://vercel.com/filberts-projects-a78ae880/harapan-maju-poc/settings?target=authentication)
+2. Turn **SSO / Deployment Protection** **off**
+3. Alternative: attach a custom domain (SSO only applies to `*.vercel.app` URLs)
+
+### Step 3 — Give OpenCLAW these values
+
+```
+Base URL:   https://harapan-maju-poc.vercel.app
+Endpoint:   POST https://harapan-maju-poc.vercel.app/api/mcp
+API Key:    <same value as INTERNAL_API_KEY in Vercel>
+
+Headers:
+  Content-Type: application/json
+  x-api-key:    <your-api-key>
+```
+
+Bearer auth also works: `Authorization: Bearer <your-api-key>`
+
+### Step 4 — Verify it works
+
+**Discovery (no auth):**
+```bash
+curl https://harapan-maju-poc.vercel.app/api/mcp
+```
+
+**List tools (requires API key):**
+```bash
+curl -X POST https://harapan-maju-poc.vercel.app/api/mcp \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: YOUR_KEY_HERE" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+```
+
+**Call a tool:**
+```bash
+curl -X POST https://harapan-maju-poc.vercel.app/api/mcp \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: YOUR_KEY_HERE" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_summary","arguments":{}}}'
+```
+
+**Direct method (also supported):**
+```bash
+curl -X POST https://harapan-maju-poc.vercel.app/api/mcp \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: YOUR_KEY_HERE" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"get_summary","params":{}}'
+```
+
+Expected: HTTP 200 with JSON-RPC `result`. If you get 401, check SSO is off **and** `INTERNAL_API_KEY` matches your header.
 
 ---
 
@@ -18,7 +90,7 @@ To allow OpenCLAW to call these APIs, either:
 
 **Endpoint:** `GET /api/dashboard/summary`
 
-**Auth:** None (after disabling Vercel SSO)
+**Auth:** `x-api-key` header (when `INTERNAL_API_KEY` is set)
 
 **Response:**
 ```json
@@ -66,7 +138,7 @@ To allow OpenCLAW to call these APIs, either:
 
 **Endpoint:** `GET /api/receipts`
 
-**Auth:** None (after disabling Vercel SSO)
+**Auth:** `x-api-key` header (when `INTERNAL_API_KEY` is set)
 
 **Query params:**
 - `limit` — max results (default 100)
@@ -203,15 +275,27 @@ To allow OpenCLAW to call these APIs, either:
 
 ---
 
-### 7. MCP JSON-RPC (Structured AI Tools)
+### 7. MCP JSON-RPC (Structured AI Tools — for OpenCLAW)
 
 **Endpoint:** `POST /api/mcp`
 
-**Auth:** None (after disabling Vercel SSO)
+**Auth:** `x-api-key` header (required when `INTERNAL_API_KEY` is set in Vercel)
 
 **Content-Type:** `application/json`
 
-**Methods:**
+**MCP standard (recommended for OpenCLAW):**
+
+List tools:
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
+```
+
+Call a tool:
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_summary","arguments":{}}}
+```
+
+**Direct method calls (also supported):**
 
 `get_summary` — Financial summary
 ```json

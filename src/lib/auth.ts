@@ -7,13 +7,17 @@ export function requireApiKey(request: NextRequest): NextResponse | null {
 
   const key =
     request.headers.get("x-api-key") ??
+    request.headers.get("x_api_key") ??
     request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??
     request.nextUrl.searchParams.get("api_key") ??
     "";
 
   if (!key || key !== API_KEY) {
     return NextResponse.json(
-      { error: "Unauthorized. Provide a valid API key via x-api-key header or ?api_key= query param." },
+      {
+        error:
+          "Unauthorized. Sign in to the dashboard, or provide a valid API key via x-api-key, x_api_key, or Authorization: Bearer.",
+      },
       { status: 401 }
     );
   }

@@ -51,17 +51,33 @@ GET https://api.telegram.org/bot8806935729:AAHWKnaghfxrwX2TCkuZya6YgE_qQvJUND4/g
 
 ---
 
-### Option B: MCP JSON-RPC API (Structured Data)
+### Option B: MCP JSON-RPC API (Structured Data — for OpenCLAW)
 
-Use this when you need structured data, not conversational answers.
+Use this when you need structured data from outside Vercel.
 
 ```
 Endpoint:   POST https://harapan-maju-poc.vercel.app/api/mcp
-Auth:       ⚠️ Requires Vercel SSO to be disabled (or use custom domain)
-            Currently returns 401 — disable SSO in Vercel dashboard first
+API Key:    Set in Vercel as INTERNAL_API_KEY — pass via x-api-key header
+SSO:        Must be disabled in Vercel dashboard (or use a custom domain)
 ```
 
-**Available methods:**
+**Headers:**
+```
+Content-Type: application/json
+x-api-key:    <INTERNAL_API_KEY>
+```
+
+**List available tools (MCP standard):**
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}
+```
+
+**Call a tool (MCP standard):**
+```json
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_summary","arguments":{}}}
+```
+
+**Direct method calls (also work):**
 
 ```json
 // Financial summary
