@@ -118,6 +118,12 @@ export const activityLogs = pgTable("activity_logs", {
   createdAt:  timestamp("created_at").defaultNow(),
 });
 
+export const appConfig = pgTable("app_config", {
+  key:       text("key").primaryKey(),
+  value:     text("value").notNull(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 // ─── DB Client ─────────────────────────────────────────────────────────────
 
 let _db: ReturnType<typeof drizzle> | null = null;
@@ -174,6 +180,7 @@ export const schema = {
   suppliers,
   customers,
   activityLogs,
+  appConfig,
 };
 
 // ─── Types ─────────────────────────────────────────────────────────────────

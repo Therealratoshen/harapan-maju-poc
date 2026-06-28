@@ -11,7 +11,7 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const authError = requireApiKey(request);
+  const authError = await requireApiKey(request);
   if (authError) return authError;
 
   const { id } = await params;
@@ -36,7 +36,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const authError = requireApiKey(request);
+  const authError = await requireApiKey(request);
   if (authError) return authError;
 
   const { id } = await params;

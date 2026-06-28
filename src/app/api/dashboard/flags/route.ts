@@ -5,7 +5,7 @@ import { requireApiKey } from "@/lib/auth";
 
 // GET /api/dashboard/flags
 export async function GET(request: NextRequest) {
-  const authError = requireApiKey(request);
+  const authError = await requireApiKey(request);
   if (authError) return authError;
 
   try {
@@ -52,14 +52,32 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// PATCH /api/dashboard/flags — resolve a flag
+// PATCH /api/dashboard/flags — resolve a flag (and optionally set invoice number)
 export async function PATCH(request: NextRequest) {
+  const authError = await requireApiKey(request);
+  if (authError) return authError;
+
   try {
     const body = await request.json();
-    const { flagId, resolved = true, resolvedBy = "owner" } = body;
+    const { flagId, resolved = true, resolvedBy = "owner", invoiceNumber } = body;
+    const invoiceFromData = body.data?.invoiceNumber as string | undefined;
 
     if (!flagId) {
       return NextResponse.json({ error: "flagId is required" }, { status: 400 });
+    }
+
+    const [flag] = await db
+      .select({ receiptId: schema.flags.receiptId })
+      .from(schema.flags)
+      .where(eq(schema.flags.id, flagId))
+      .limit(1);
+
+    const invoice = invoiceNumber ?? invoiceFromData;
+    if (invoice && flag?.receiptId) {
+      await db
+        .update(schema.receipts)
+        .set({ invoiceNumber: invoice })
+        .where(eq(schema.receipts.id, flag.receiptId));
     }
 
     await db

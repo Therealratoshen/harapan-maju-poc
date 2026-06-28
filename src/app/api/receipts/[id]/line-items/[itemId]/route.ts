@@ -11,7 +11,7 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; itemId: string }> }
 ) {
-  const authError = requireApiKey(request);
+  const authError = await requireApiKey(request);
   if (authError) return authError;
 
   const { itemId } = await params;
@@ -54,7 +54,7 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; itemId: string }> }
 ) {
-  const authError = requireApiKey(request);
+  const authError = await requireApiKey(request);
   if (authError) return authError;
 
   const { itemId } = await params;

@@ -11,7 +11,7 @@ import { eq, desc, sql, and } from "drizzle-orm";
 import { requireApiKey } from "@/lib/auth";
 
 export async function GET(request: NextRequest) {
-  const authError = requireApiKey(request);
+  const authError = await requireApiKey(request);
   if (authError) return authError;
 
   const { searchParams } = new URL(request.url);

@@ -1,10 +1,14 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { sql } from "drizzle-orm";
+import { requireAdminApiKey } from "@/lib/auth";
 
-// GET /api/debug — diagnose what's failing
-export async function GET() {
-  const results: Record<string, any> = {};
+// GET /api/debug — diagnose what's failing (admin only in production)
+export async function GET(request: NextRequest) {
+  const authError = await requireAdminApiKey(request);
+  if (authError) return authError;
+
+  const results: Record<string, unknown> = {};
 
   try {
     // Test 1: receipts table

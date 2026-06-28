@@ -7,11 +7,15 @@
  * Usage: curl -X POST https://harapan-maju-poc.vercel.app/api/seed
  */
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { db, schema } from "@/lib/db";
 import { eq } from "drizzle-orm";
+import { requireAdminApiKey } from "@/lib/auth";
 
-export async function POST() {
+export async function POST(request: NextRequest) {
+  const authError = await requireAdminApiKey(request);
+  if (authError) return authError;
+
   try {
     // Clear existing data
     await db.delete(schema.stockLedger);

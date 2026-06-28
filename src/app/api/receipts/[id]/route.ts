@@ -13,7 +13,7 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const authError = requireApiKey(request);
+  const authError = await requireApiKey(request);
   if (authError) return authError;
 
   const { id } = await params;
@@ -53,7 +53,7 @@ export async function DELETE(
 ) {
   const { id } = await params;
   const parsedId = parseInt(id);
-  const authErrorDel = requireApiKey(request);
+  const authErrorDel = await requireApiKey(request);
   if (authErrorDel) return authErrorDel;
 
   if (!parsedId) return NextResponse.json({ error: "Invalid receipt ID" }, { status: 400 });
@@ -83,7 +83,7 @@ export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const authErrorPatch = requireApiKey(request);
+  const authErrorPatch = await requireApiKey(request);
   if (authErrorPatch) return authErrorPatch;
 
   const { id } = await params;

@@ -14,7 +14,7 @@ import { eq } from "drizzle-orm";
 import postgres from "postgres";
 
 export async function POST(request: NextRequest) {
-  const authError = requireApiKey(request);
+  const authError = await requireApiKey(request);
   if (authError) return authError;
 
   const url = new URL(request.url);

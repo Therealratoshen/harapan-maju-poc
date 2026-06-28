@@ -5,11 +5,13 @@
  * Safe to run multiple times — uses IF NOT EXISTS.
  */
 
-import { NextResponse } from "next/server";
-import { getDb } from "@/lib/db";
+import { NextRequest, NextResponse } from "next/server";
+import { requireAdminApiKey } from "@/lib/auth";
 import postgres from "postgres";
 
-export async function POST() {
+export async function POST(request: NextRequest) {
+  const authError = await requireAdminApiKey(request);
+  if (authError) return authError;
   const connStr = process.env.POSTGRES_URL ?? process.env.DATABASE_URL ?? "";
   if (!connStr) {
     return NextResponse.json({ error: "POSTGRES_URL not set" }, { status: 500 });
@@ -127,6 +129,12 @@ export async function POST() {
         message TEXT,
         actor TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS app_config (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
       );
     `);
 

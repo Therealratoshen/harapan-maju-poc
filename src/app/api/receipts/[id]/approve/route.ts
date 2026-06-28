@@ -38,7 +38,7 @@ async function notifyApproval(receiptId: number, merchantName: string, declaredT
 // ─── Main ──────────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
-  const authError = requireApiKey(request);
+  const authError = await requireApiKey(request);
   if (authError) return authError;
 
   const url = new URL(request.url);

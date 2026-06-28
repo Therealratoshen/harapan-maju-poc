@@ -56,7 +56,7 @@ function formatReceipts(rows: any[]) {
 }
 
 export async function POST(request: NextRequest) {
-  const authError = requireApiKey(request);
+  const authError = await requireApiKey(request);
   if (authError) return authError;
 
   try {

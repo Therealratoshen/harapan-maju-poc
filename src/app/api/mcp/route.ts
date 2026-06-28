@@ -28,7 +28,7 @@ function jsonRpcError(id: unknown, code: number, message: string, status = 400) 
 }
 
 export async function POST(request: NextRequest) {
-  const authError = requireApiKey(request);
+  const authError = await requireApiKey(request);
   if (authError) return authError;
 
   try {

@@ -14,7 +14,7 @@ import { db, schema } from "@/lib/db";
 import { eq, sql } from "drizzle-orm";
 
 export async function POST(request: NextRequest) {
-  const authError = requireApiKey(request);
+  const authError = await requireApiKey(request);
   if (authError) return authError;
 
   try {

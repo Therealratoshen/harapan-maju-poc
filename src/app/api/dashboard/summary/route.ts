@@ -13,7 +13,7 @@ function rows<T>(result: any): T[] {
 }
 
 export async function GET(request: NextRequest) {
-  const authError = requireApiKey(request);
+  const authError = await requireApiKey(request);
   if (authError) return authError;
 
   try {

@@ -10,7 +10,7 @@ function rp(n: number) {
 
 // ─── GET /api/receipts ────────────────────────────────────────────────────────
 export async function GET(request: NextRequest) {
-  const authError = requireApiKey(request);
+  const authError = await requireApiKey(request);
   if (authError) return authError;
 
   const { searchParams } = new URL(request.url);
@@ -91,7 +91,7 @@ export async function GET(request: NextRequest) {
 // If base64Image is provided, saves to Vercel Blob (persistent).
 // Accepts receiptType: "buyer" (pengeluaran/beli) or "supplier" (pemasukan/jual).
 export async function POST(request: NextRequest) {
-  const authError = requireApiKey(request);
+  const authError = await requireApiKey(request);
   if (authError) return authError;
 
   try {
@@ -104,6 +104,7 @@ export async function POST(request: NextRequest) {
       merchantName = "—",
       customerName,
       invoiceNumber,
+      declaredTotal,
     } = body;
 
     let imageUrl = "";
@@ -137,7 +138,7 @@ export async function POST(request: NextRequest) {
       customerName: customerName ?? null,
       invoiceNumber: invoiceNumber ?? null,
       receiptDate: receiptDate ? new Date(receiptDate) : new Date(),
-      declaredTotal: 0,
+      declaredTotal: Number(declaredTotal) || 0,
       computedTotal: 0,
       currency: "IDR",
       status: "pending",

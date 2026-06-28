@@ -175,7 +175,7 @@ async function runOCR(imageUrl: string): Promise<any> {
 // ─── Main route ─────────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
-  const authError = requireApiKey(request);
+  const authError = await requireApiKey(request);
   if (authError) return authError;
 
   const url = new URL(request.url);
